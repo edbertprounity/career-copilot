@@ -1,0 +1,15 @@
+.env
+.env.*
+venv/
+.venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+node_modules/
+
+# Local submission pack and exports — do not publish
+A1_Report_Materials_14722262/
+A1_Report_Materials_14722262.zip
+A1_Report_Materials_STUDENTID/
+docs/chat_export.md
+_pdf_preview/

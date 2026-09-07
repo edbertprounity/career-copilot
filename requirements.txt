@@ -1,0 +1,8 @@
+streamlit==1.62.0
+pydantic==2.13.5
+numpy==2.4.6
+fpdf2==2.8.8
+google-genai==2.20.0
+python-dotenv==1.2.3
+sentence-transformers==6.0.0
+pytest==9.1.1

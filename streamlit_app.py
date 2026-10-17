@@ -6,6 +6,7 @@ import json
 import tempfile
 from functools import lru_cache
 from pathlib import Path
+import app.ui_analyst as ui_analyst
 
 import streamlit as st
 
@@ -454,7 +455,7 @@ def _gated_tool_error_message(tool_name: str, observation: dict) -> str:
 
 def _select_job(job: dict) -> None:
     profile = st.session_state.profile
-    description = _job_description(str(job.get("document_id") or ""))
+    description = str(job.get("description") or "") or _job_description(str(job.get("document_id") or "")
     title = str(job.get("title") or "")
     client = llm_client.get_gemini_client()
     diagnostics: dict = {}
@@ -471,7 +472,7 @@ def _select_job(job: dict) -> None:
     )
     sections = _split_cv_markdown(markdown)
     _clear_cv_widget_keys()
-    st.session_state.selected_job = job
+    st.session_state.selected_job = {**job, "description": description}
     st.session_state.cv_sections = sections
     st.session_state.cv_sections_original = dict(sections)
     st.session_state.cv_section_order = [name for name in sections if name != "Summary"]
@@ -746,6 +747,8 @@ def _render_cv_editor() -> None:
     with right:
         st.markdown("**Live preview**")
         st.markdown(_reassemble_cv(st.session_state.cv_sections))
+    
+    ui_analyst.render_analysis_panel()
 
     if rerun_after_widgets:
         st.rerun()

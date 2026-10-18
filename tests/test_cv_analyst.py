@@ -12,7 +12,14 @@ from pydantic import ValidationError
 import app.llm_client as llm_client
 import streamlit_app as ui
 from app.agent_engine import detect_thin_content
-from app.cv_analyst import AnalysisIssue, _parse_items, _skills_items, analyse_cv
+from app.cv_analyst import (
+    SEVERITY_ORDER,
+    AnalysisIssue,
+    _parse_items,
+    _skills_items,
+    add_skill_evidence,
+    analyse_cv,
+)
 from app.cv_generator import (
     _ungrounded_summary_terms,
     generate_cv_markdown,
@@ -26,6 +33,13 @@ DEFAULT_JOB = "graduate_ai_engineer"
 RETAIL = (
     "Handled customer questions, worked with a small team during busy periods "
     "and followed written procedures."
+)
+# Rule 3 of the brief: no claim that the student lacks something, and no
+# prediction about hiring.
+BANNED_WORDING = re.compile(
+    r"\b(?:lack\w*|don't have|do not have|not qualified|unqualified|hire\w*|"
+    r"hiring|shortlist\w*|reject\w*|your chances|not a fit)\b",
+    re.IGNORECASE,
 )
 
 
@@ -351,8 +365,10 @@ def test_issue_ids_are_stable_and_unique() -> None:
     first = [issue.issue_id for issue in analyse_cv(maya, sections, None)]
     second = [issue.issue_id for issue in analyse_cv(maya, sections, None)]
     assert first == second
-    assert len(set(first)) == len(first) == 3
-    assert all(re.fullmatch(r"vague-[0-9a-f]{8}(-\d+)?", issue_id) for issue_id in first)
+    assert len(set(first)) == len(first)
+    id_re = r"(vague|no_evidence|ungrounded_edit|low_relevance)-[0-9a-f]{8}(-\d+)?"
+    assert all(re.fullmatch(id_re, issue_id) for issue_id in first)
+    assert sum(issue_id.endswith("-2") for issue_id in first) == 1
 
 
 def test_issues_are_sorted_most_severe_first() -> None:
@@ -362,7 +378,251 @@ def test_issues_are_sorted_most_severe_first() -> None:
         "- Organised weekly study sessions for classmates in the library."
     )
     issues = analyse_cv(maya, sections, None)
-    assert [(issue.severity, issue.section) for issue in issues] == [
+    ranks = [SEVERITY_ORDER.index(issue.severity) for issue in issues]
+    assert ranks == sorted(ranks)
+    assert [(i.severity, i.section) for i in issues if i.type == "vague"] == [
         ("high", "Experience"),
         ("medium", "Projects"),
     ]
+
+
+@pytest.mark.parametrize("job_id", sorted(JOBS))
+@pytest.mark.parametrize("document_id", DEMO_IDS)
+def test_every_demo_profile_gets_section_issues(document_id: str, job_id: str) -> None:
+    profile = _demo_profile(document_id)
+    sections = _cv_sections(profile, job_id)
+    issues = analyse_cv(profile, sections, JOBS[job_id])
+    assert issues
+    for issue in issues:
+        assert issue.section in sections
+        assert issue.why
+
+
+def test_templates_never_claim_the_student_lacks_anything() -> None:
+    for document_id in DEMO_IDS:
+        profile = _demo_profile(document_id)
+        for issue in analyse_cv(profile, _cv_sections(profile), JOBS[DEFAULT_JOB]):
+            text = " ".join((issue.why, issue.suggestion, issue.question))
+            assert not BANNED_WORDING.search(text), text
+            if issue.type == "no_evidence":
+                assert "not shown in your CV" in issue.why
+
+
+# ungrounded_edit
+
+
+@pytest.mark.parametrize("job_id", sorted(JOBS))
+@pytest.mark.parametrize("document_id", DEMO_IDS)
+def test_unedited_cvs_have_no_ungrounded_edit(document_id: str, job_id: str) -> None:
+    profile = _demo_profile(document_id)
+    sections = _cv_sections(profile, job_id)
+    assert "cv_layout" in sections["Summary"]
+    issues = analyse_cv(profile, sections, JOBS[job_id])
+    assert [i for i in issues if i.type == "ungrounded_edit"] == []
+    assert not any("cv_layout" in i.quote or "cv_layout" in i.why for i in issues)
+
+
+@pytest.mark.parametrize(
+    ("section", "edit", "quotes", "named"),
+    [
+        ("Skills", lambda s: s + ", Kubernetes", ["Kubernetes"], ["Kubernetes"]),
+        ("Skills", lambda s: s + "\nkubernetes", ["kubernetes"], ["kubernetes"]),
+        ("Skills", lambda s: s + "\nAWS, Go, C++", ["AWS", "Go", "C++"], ["AWS"]),
+        (
+            "Projects",
+            lambda s: s.replace("pytest, Git", "pytest, Git, Terraform"),
+            ["Terraform"],
+            ["Terraform"],
+        ),
+        (
+            "Experience",
+            lambda s: s + "\n- Led a team of 10 engineers using TensorFlow.",
+            ["Led a team of 10 engineers using TensorFlow."],
+            ["TensorFlow", "led a team"],
+        ),
+        (
+            "Professional Summary",
+            lambda s: s + " Worked as a Software Engineering Intern.",
+            ["Worked as a Software Engineering Intern."],
+            ["experience as Software Engineering Intern"],
+        ),
+        (
+            "Summary",
+            lambda s: s.replace("# Maya Chen", "# Maya Chen, Senior Engineer at Google"),
+            ["Maya Chen, Senior Engineer at Google"],
+            ["Google"],
+        ),
+    ],
+    ids=[
+        "skill-appended",
+        "skill-lowercase",
+        "short-skills",
+        "technology",
+        "experience-sentence",
+        "role-framing",
+        "header",
+    ],
+)
+def test_typed_unsupported_text_is_ungrounded_edit(section, edit, quotes, named) -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections[section] = edit(sections[section])
+    issues = analyse_cv(maya, sections, JOBS[DEFAULT_JOB])
+    flagged = [issue for issue in issues if issue.type == "ungrounded_edit"]
+    assert [issue.quote for issue in flagged] == quotes
+    assert all(issue.section == section and issue.severity == "high" for issue in flagged)
+    assert all(issue.quote in sections[section] for issue in flagged)
+    for term in named:
+        assert term in flagged[0].why
+
+
+def test_ungrounded_skill_is_not_also_no_evidence() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections["Skills"] += ", Kubernetes"
+    about = [i.type for i in analyse_cv(maya, sections, None) if "Kubernetes" in i.quote]
+    assert about == ["ungrounded_edit"]
+
+
+def test_layout_comment_is_never_analysed() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    baseline = analyse_cv(maya, sections, JOBS[DEFAULT_JOB])
+    comment = "<!-- cv_layout: single -->"
+    for name in ("Skills", "Projects", "Experience", "Professional Summary"):
+        sections[name] = f"{comment}\n{sections[name]}\n{comment}"
+    issues = analyse_cv(maya, sections, JOBS[DEFAULT_JOB])
+    assert [i.issue_id for i in issues] == [i.issue_id for i in baseline]
+    assert not any("cv_layout" in i.quote for i in issues)
+
+
+# The demo loop: flag, add evidence, re-analyse, cleared
+
+
+@pytest.mark.parametrize(
+    ("section", "edit"),
+    [
+        ("Skills", lambda s: s + ", Kubernetes"),
+        ("Experience", lambda s: s + "\n- Deployed the stock app on Kubernetes."),
+    ],
+    ids=["skills-item", "experience-sentence"],
+)
+def test_evidence_clears_a_flagged_edit(section, edit) -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections[section] = edit(sections[section])
+
+    issues = analyse_cv(maya, sections, JOBS[DEFAULT_JOB])
+    before = [issue for issue in issues if "Kubernetes" in issue.quote]
+    assert [(i.type, i.severity) for i in before] == [("ungrounded_edit", "high")]
+
+    result = add_skill_evidence(maya, "Kubernetes", "kubernetes_certificate.png")
+    assert result["status"] == "success"
+
+    after = analyse_cv(maya, sections, JOBS[DEFAULT_JOB])
+    assert not any("Kubernetes" in i.quote or "Kubernetes" in i.why for i in after)
+
+
+# add_skill_evidence
+
+
+def test_add_skill_evidence_keeps_existing_entries() -> None:
+    maya = _demo_profile("student_profile_01")
+    original = [dict(entry) for entry in maya.skill_evidence]
+    maya.skill_evidence[0]["note"] = "extra key from an older writer"
+
+    result = add_skill_evidence(maya, "  Flask ", " flask_screenshot.png ")
+
+    assert result == {"status": "success", "updated_fields": ["skill_evidence"]}
+    assert maya.skill_evidence[:-1] == original
+    assert maya.skill_evidence[-1] == {"skill": "Flask", "source": "flask_screenshot.png"}
+
+
+def test_add_skill_evidence_skips_exact_duplicates() -> None:
+    maya = _demo_profile("student_profile_01")
+    existing = dict(maya.skill_evidence[0])
+    count = len(maya.skill_evidence)
+    assert add_skill_evidence(maya, existing["skill"], existing["source"]) == {
+        "status": "skipped",
+        "reason": "duplicate",
+    }
+    assert add_skill_evidence(maya, "Flask", "a.png")["status"] == "success"
+    assert add_skill_evidence(maya, "Flask", "a.png")["status"] == "skipped"
+    assert len(maya.skill_evidence) == count + 1
+
+
+@pytest.mark.parametrize(
+    ("skill", "source"), [("", "a.png"), ("Flask", "   "), (None, "a.png")]
+)
+def test_add_skill_evidence_rejects_empty_values(skill, source) -> None:
+    maya = _demo_profile("student_profile_01")
+    before = [dict(entry) for entry in maya.skill_evidence]
+    result = add_skill_evidence(maya, skill, source)
+    assert result["status"] == "error"
+    assert maya.skill_evidence == before
+
+
+# no_evidence
+
+
+def test_maya_no_evidence_is_the_undescribed_technologies() -> None:
+    maya = _demo_profile("student_profile_01")
+    issues = analyse_cv(maya, _cv_sections(maya), None)
+    issues = [issue for issue in issues if issue.type == "no_evidence"]
+    assert {i.quote for i in issues} == {"Flask", "SQLite", "prompt design", "JSON"}
+    assert all(i.section == "Projects" and i.severity == "low" for i in issues)
+    flask = next(i for i in issues if i.quote == "Flask")
+    assert "the Team Course Planner project" in flask.why
+
+
+def test_tool_calling_clears_against_tool_call_agent() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    assert "tool-call agent" in sections["Projects"]
+    quotes = [i.quote for i in analyse_cv(maya, sections, None) if i.type == "no_evidence"]
+    assert "tool calling" not in quotes
+
+    sections["Projects"] = sections["Projects"].replace("tool-call agent", "agent")
+    quotes = [i.quote for i in analyse_cv(maya, sections, None) if i.type == "no_evidence"]
+    assert "tool calling" in quotes
+
+
+def test_evidence_entry_clears_no_evidence() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    add_skill_evidence(maya, "Flask", "flask_screenshot.png")
+    quotes = [i.quote for i in analyse_cv(maya, sections, None) if i.type == "no_evidence"]
+    assert "Flask" not in quotes
+    assert "SQLite" in quotes
+
+
+def test_skills_only_claim_is_medium() -> None:
+    maya = _demo_profile("student_profile_01")
+    maya.technical_skills.append("Docker basics")
+    issues = analyse_cv(maya, _cv_sections(maya), None)
+    issues = [issue for issue in issues if issue.quote == "Docker basics"]
+    assert [(i.type, i.section, i.severity) for i in issues] == [
+        ("no_evidence", "Skills", "medium")
+    ]
+
+
+def test_achievement_needs_evidence_until_added() -> None:
+    maya = _demo_profile("student_profile_01")
+    maya.activities.append("Won first prize at the UTS Hackathon")
+    sections = _cv_sections(maya)
+    claim = "Won first prize at the UTS Hackathon"
+    issues = [i for i in analyse_cv(maya, sections, None) if i.quote == claim]
+    assert [(i.type, i.section, i.severity) for i in issues] == [
+        ("no_evidence", "Activities", "low")
+    ]
+
+    add_skill_evidence(maya, "first prize at the UTS Hackathon", "hackathon_certificate.png")
+    assert not any(i.quote == claim for i in analyse_cv(maya, sections, None))
+
+
+def test_typed_achievement_is_ungrounded_not_no_evidence() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections["Activities"] += "\n- Won the Atlassian Hackathon award"
+    about = [i.type for i in analyse_cv(maya, sections, None) if "Atlassian" in i.quote]
+    assert about == ["ungrounded_edit"]

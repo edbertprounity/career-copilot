@@ -9,12 +9,14 @@ from __future__ import annotations
 
 import hashlib
 import re
+from collections.abc import Iterator
 from dataclasses import dataclass, field
 from typing import Literal
 
 from pydantic import BaseModel
 
-from app.agent_engine import THIN_DESCRIPTION_WORDS
+from app.agent_engine import THIN_DESCRIPTION_WORDS, update_profile_field
+from app.cv_generator import LAYOUT_COMMENT_RE, profile_supports, ungrounded_terms
 from app.schemas import StudentProfile
 
 IssueType = Literal["vague", "no_evidence", "ungrounded_edit", "low_relevance"]
@@ -27,6 +29,9 @@ SKILLS_SECTION = "Skills"
 ITEM_SECTIONS = ("Projects", "Experience")
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
+_HEADING_RE = re.compile(r"^#+\s*")
+# Same split as the summary grounding check: claims cannot cross sentences.
+_SENTENCE_SPLIT_RE = re.compile(r"(?<=[.!?])\s+(?=[A-Z])")
 # One marker then a space, or a bare marker. "**Languages:**" is not a bullet.
 _BULLET_RE = re.compile(r"^[-*•](?:\s+|$)")
 _TECH_LINE_RE = re.compile(r"^-\s*technologies\s*:\s*", re.IGNORECASE)
@@ -65,6 +70,18 @@ _SCALE_RE = re.compile(
     r"\d|\b(?:" + "|".join(_NUMBER_WORDS) + r")\b", re.IGNORECASE
 )
 
+# no_evidence: achievement claims that a certificate or record could back.
+_ACHIEVEMENT_RE = re.compile(
+    r"\b(?:award\w*|prize\w*|won|winner\w*|scholarship\w*|certif\w*|"
+    r"dean's list|first place|top \d+%)",
+    re.IGNORECASE,
+)
+# Stemming for clearing no_evidence. Both sides get the same treatment, so
+# over-stemming only makes clearing likelier, which is the safer error.
+_STEM_SUFFIXES = ("ing", "ed", "s")
+_MIN_STEM = 3
+_TOKEN_EDGE_PUNCTUATION = ".,;:()[]!?\"'"
+
 
 class AnalysisIssue(BaseModel):
     issue_id: str
@@ -98,8 +115,17 @@ def analyse_cv(
 
     profile is the confirmed ground truth, cv_sections the editor's text by
     section name, and job the selected job (title and description) or None.
+    The generator's layout comment is stripped first, so no check sees it.
     """
-    issues = _vague_issues(cv_sections, profile)
+    sections = {
+        name: LAYOUT_COMMENT_RE.sub("", text) for name, text in cv_sections.items()
+    }
+    job_title = str((job or {}).get("title") or "")
+    issues = [
+        *_vague_issues(sections, profile),
+        *_ungrounded_edit_issues(sections, profile, job_title),
+        *_no_evidence_issues(sections, profile, job_title),
+    ]
     _make_ids_unique(issues)
     section_rank = {name: index for index, name in enumerate(cv_sections)}
     return sorted(
@@ -109,6 +135,28 @@ def analyse_cv(
             section_rank.get(issue.section, len(section_rank)),
         ),
     )
+
+
+def add_skill_evidence(profile: StudentProfile, skill: str, source: str) -> dict:
+    """Record evidence for a skill or claim, so its issue clears on re-analysis.
+
+    Existing entries are rebuilt as {skill, source} strings so the whole list
+    passes update_profile_field's validation, and the write goes through that
+    tool like any other profile change. An exact duplicate is skipped.
+    """
+    skill = str(skill or "").strip()
+    source = str(source or "").strip()
+    if not skill or not source:
+        return {"status": "error", "reason": "skill and source must be non-empty"}
+    entries = [
+        {"skill": str(item.get("skill") or ""), "source": str(item.get("source") or "")}
+        for item in profile.skill_evidence
+        if isinstance(item, dict)
+    ]
+    new_entry = {"skill": skill, "source": source}
+    if new_entry in entries:
+        return {"status": "skipped", "reason": "duplicate"}
+    return update_profile_field(profile, {"skill_evidence": [*entries, new_entry]})
 
 
 def _vague_issues(
@@ -214,11 +262,15 @@ def _profile_technologies(profile: StudentProfile) -> list[str]:
     return [
         *profile.technical_skills,
         *(tech for project in profile.projects for tech in project.technologies),
-        *(
-            str(item.get("skill") or "")
-            for item in profile.skill_evidence
-            if isinstance(item, dict)
-        ),
+        *_evidence_skills(profile),
+    ]
+
+
+def _evidence_skills(profile: StudentProfile) -> list[str]:
+    return [
+        str(item.get("skill") or "")
+        for item in profile.skill_evidence
+        if isinstance(item, dict)
     ]
 
 
@@ -234,6 +286,218 @@ def _name_acronyms(name: str) -> frozenset[str]:
     if len(initials) >= 2:
         found.add(initials)
     return frozenset(found)
+
+
+def _ungrounded_edit_issues(
+    sections: dict[str, str], profile: StudentProfile, job_title: str
+) -> list[AnalysisIssue]:
+    """Flag CV text the profile, with its evidence, does not support.
+
+    A list item (Skills, Technologies) is itself a claim, so it must appear
+    whole in the profile facts: the summary extractor skips such items when
+    they are sentence-initial, lowercase or under four letters. Prose goes
+    through the summary grounding check one sentence at a time.
+    """
+    issues: list[AnalysisIssue] = []
+    for section, kind, text in _cv_units(sections):
+        if kind == "item":
+            if not profile_supports(text, profile):
+                issues.append(_ungrounded_issue(section, text, [text]))
+            continue
+        terms = _unsupported_terms(text, profile, job_title)
+        if terms:
+            issues.append(_ungrounded_issue(section, text, terms))
+    return issues
+
+
+def _unsupported_terms(
+    sentence: str, profile: StudentProfile, job_title: str
+) -> list[str]:
+    """Terms the summary check flags, minus any the profile or evidence supports."""
+    return [
+        term
+        for term in ungrounded_terms(sentence.replace("**", ""), profile, job_title)
+        if not profile_supports(term, profile)
+    ]
+
+
+def _ungrounded_issue(section: str, quote: str, terms: list[str]) -> AnalysisIssue:
+    unique = list(dict.fromkeys(terms))
+    named = _join_quoted(unique)
+    single = len(unique) == 1
+    it, is_, does = ("it", "is", "does") if single else ("them", "are", "do")
+    return _issue(
+        "ungrounded_edit",
+        section,
+        quote,
+        "high",
+        why=(
+            f"{named} {is_} not in your confirmed profile, so nothing in your CV "
+            f"backs {it} up."
+        ),
+        suggestion=(
+            f"Remove {it}, or keep {it} only if you can back {it} up, for "
+            "example by attaching evidence of where you did it."
+        ),
+        question=f"Where {does} {named} come from?",
+    )
+
+
+def _no_evidence_issues(
+    sections: dict[str, str], profile: StudentProfile, job_title: str
+) -> list[AnalysisIssue]:
+    """Flag listed skills and achievements that nothing in the CV shows.
+
+    A listed skill clears when an evidence entry or any Projects/Experience
+    description mentions it, compared after stemming. Unsupported skills are
+    left to ungrounded_edit, so nothing is reported twice.
+    """
+    entries = [
+        (section, item)
+        for section in ITEM_SECTIONS
+        for item in _parse_items(sections.get(section, ""))
+    ]
+    descriptions = [_stem_phrase(item.description) for _, item in entries]
+    evidence = [key for key in map(_stem_phrase, _evidence_skills(profile)) if key]
+    listed = [
+        (section, tech, item.title)
+        for section, item in entries
+        for tech in item.technologies
+    ]
+    listed += [(SKILLS_SECTION, skill, "") for skill in _skills_items(sections)]
+
+    issues: list[AnalysisIssue] = []
+    seen: set[str] = set()
+    for section, skill, entry_title in listed:
+        key = _stem_phrase(skill)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if not profile_supports(skill, profile):
+            continue
+        if any(
+            _has_stemmed_phrase(key, entry) or _has_stemmed_phrase(entry, key)
+            for entry in evidence
+        ):
+            continue
+        if any(_has_stemmed_phrase(text, key) for text in descriptions):
+            continue
+        issues.append(_listed_skill_issue(section, skill, entry_title))
+
+    for section, kind, text in _cv_units(sections):
+        if kind != "sentence" or not _ACHIEVEMENT_RE.search(text):
+            continue
+        if _unsupported_terms(text, profile, job_title):
+            continue
+        if any(_has_stemmed_phrase(_stem_phrase(text), entry) for entry in evidence):
+            continue
+        issues.append(
+            _issue(
+                "no_evidence",
+                section,
+                text,
+                "low",
+                why="This achievement is stated but not shown in your CV with any evidence.",
+                suggestion=(
+                    "Attach a certificate or screenshot, or say who awarded it "
+                    "and when."
+                ),
+                question="Do you have a certificate or record for this?",
+            )
+        )
+    return issues
+
+
+def _listed_skill_issue(section: str, skill: str, entry_title: str) -> AnalysisIssue:
+    if section == SKILLS_SECTION:
+        return _issue(
+            "no_evidence",
+            section,
+            skill,
+            "medium",
+            why=(
+                f"{skill} is in your skills list but is not shown in your CV: "
+                "no project or experience describes using it."
+            ),
+            suggestion=(
+                f"Name the project, course or job where you used {skill}, or "
+                "attach evidence such as a certificate."
+            ),
+            question=f"Where have you used {skill}?",
+        )
+    entry = _entry_name(section, entry_title)
+    return _issue(
+        "no_evidence",
+        section,
+        skill,
+        "low",
+        why=(
+            f"{skill} is listed for {entry}, but no description shows how you "
+            "used it, so it is not shown in your CV."
+        ),
+        suggestion=(
+            f"If you used {skill} in {entry}, add one line on what you did with "
+            "it, or attach evidence such as a screenshot."
+        ),
+        question=f"What did you do with {skill} in {entry}?",
+    )
+
+
+def _cv_units(sections: dict[str, str]) -> Iterator[tuple[str, str, str]]:
+    """Every checkable unit of the CV, in order, as (section, kind, text).
+
+    kind is "item" for each Skills or Technologies list item and "sentence"
+    for each prose sentence. Text is verbatim, so it can be quoted back.
+    """
+    for section, body in sections.items():
+        for raw_line in body.splitlines():
+            line = raw_line.strip()
+            tech_label = _TECH_LINE_RE.match(line)
+            if tech_label or section == SKILLS_SECTION:
+                if tech_label:
+                    listed = line[tech_label.end() :]
+                else:
+                    listed = _SKILL_LABEL_RE.sub("", _BULLET_RE.sub("", line))
+                for item in _split_list(listed):
+                    yield section, "item", item
+                continue
+            text = _BULLET_RE.sub("", _HEADING_RE.sub("", line))
+            for sentence in _SENTENCE_SPLIT_RE.split(text):
+                if sentence.strip():
+                    yield section, "sentence", sentence.strip()
+
+
+def _join_quoted(terms: list[str]) -> str:
+    quoted = [f'"{term}"' for term in terms]
+    if len(quoted) <= 1:
+        return "".join(quoted)
+    return f"{', '.join(quoted[:-1])} and {quoted[-1]}"
+
+
+def _stem_phrase(text: str) -> str:
+    """Lowercase, hyphens to spaces, edge punctuation off, -ing/-ed/-s off."""
+    tokens = (token.strip(_TOKEN_EDGE_PUNCTUATION) for token in _normalize(text).split())
+    return " ".join(_stem(token) for token in tokens if token)
+
+
+def _stem(token: str) -> str:
+    stripped = True
+    while stripped:
+        stripped = False
+        for suffix in _STEM_SUFFIXES:
+            if token.endswith(suffix) and len(token) - len(suffix) >= _MIN_STEM:
+                token = token[: -len(suffix)]
+                stripped = True
+                break
+    return token
+
+
+def _has_stemmed_phrase(text_key: str, phrase_key: str) -> bool:
+    """Whole-token match between two _stem_phrase outputs."""
+    if not phrase_key:
+        return False
+    pattern = rf"(?<!\S){re.escape(phrase_key)}(?!\S)"
+    return re.search(pattern, text_key) is not None
 
 
 def _entry_name(section: str, title: str) -> str:

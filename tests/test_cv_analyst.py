@@ -13,12 +13,16 @@ import app.llm_client as llm_client
 import streamlit_app as ui
 from app.agent_engine import detect_thin_content
 from app.cv_analyst import (
+    JOB_AD_SECTION,
+    MAX_REQUIREMENT_ISSUES,
     SEVERITY_ORDER,
     AnalysisIssue,
     _parse_items,
+    _sections_from_markdown,
     _skills_items,
     add_skill_evidence,
     analyse_cv,
+    main,
 )
 from app.cv_generator import (
     _ungrounded_summary_terms,
@@ -354,7 +358,10 @@ def test_every_quote_is_verbatim_from_its_section(document_id: str, job_id: str)
     sections = _cv_sections(profile, job_id)
     for issue in analyse_cv(profile, sections, JOBS[job_id]):
         assert issue.quote
-        assert issue.quote in sections[issue.section]
+        if issue.section == JOB_AD_SECTION:
+            assert issue.quote in JOBS[job_id]["description"]
+        else:
+            assert issue.quote in sections[issue.section]
         assert issue.why and issue.suggestion and issue.question
 
 
@@ -394,7 +401,7 @@ def test_every_demo_profile_gets_section_issues(document_id: str, job_id: str) -
     issues = analyse_cv(profile, sections, JOBS[job_id])
     assert issues
     for issue in issues:
-        assert issue.section in sections
+        assert issue.section in sections or issue.section == JOB_AD_SECTION
         assert issue.why
 
 
@@ -626,3 +633,204 @@ def test_typed_achievement_is_ungrounded_not_no_evidence() -> None:
     sections["Activities"] += "\n- Won the Atlassian Hackathon award"
     about = [i.type for i in analyse_cv(maya, sections, None) if "Atlassian" in i.quote]
     assert about == ["ungrounded_edit"]
+
+
+def test_typed_achievement_is_named_as_an_achievement() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    claim = "Won Employee of the Month for handling customer questions during busy periods."
+    sections["Experience"] += f"\n- {claim}"
+
+    [issue] = [i for i in analyse_cv(maya, sections, None) if i.quote == claim]
+    assert (issue.type, issue.severity) == ("ungrounded_edit", "high")
+    assert issue.why.startswith("This achievement isn't in your confirmed profile")
+    assert "Employee" not in issue.why and "Month" not in issue.why
+    assert "Employee" not in issue.question
+
+    add_skill_evidence(maya, "Employee of the Month", "employee_of_the_month.png")
+    assert not any(i.quote == claim for i in analyse_cv(maya, sections, None))
+
+
+# low_relevance
+
+
+def _job(description: str, **extra) -> dict:
+    return {
+        "document_id": "custom_job",
+        "title": "Backend Intern",
+        "description": description,
+        **extra,
+    }
+
+
+def _job_ad_issues(
+    profile: StudentProfile, sections: dict[str, str], job: dict
+) -> list[AnalysisIssue]:
+    return [i for i in analyse_cv(profile, sections, job) if i.section == JOB_AD_SECTION]
+
+
+def _entry_relevance_issues(
+    profile: StudentProfile, sections: dict[str, str], job: dict | None
+) -> list[AnalysisIssue]:
+    issues = analyse_cv(profile, sections, job)
+    return [
+        i for i in issues if i.type == "low_relevance" and i.section != JOB_AD_SECTION
+    ]
+
+
+def test_unrelated_entry_is_low_relevance() -> None:
+    maya = _demo_profile("student_profile_01")
+    issues = _entry_relevance_issues(maya, _cv_sections(maya), JOBS[DEFAULT_JOB])
+    assert [(i.section, i.quote, i.severity) for i in issues] == [
+        ("Experience", RETAIL, "low")
+    ]
+    assert "your CV lists (Python)" in issues[0].why
+
+
+def test_no_entry_is_flagged_when_the_job_names_no_cv_skill() -> None:
+    maya = _demo_profile("student_profile_01")
+    job = _job("Requirements: Kafka.")
+    assert _entry_relevance_issues(maya, _cv_sections(maya), job) == []
+
+
+def test_unsupported_skill_does_not_count_as_a_job_skill() -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections["Skills"] += ", Kubernetes"
+    job = _job("Requirements: Python, Kubernetes.")
+    issues = _entry_relevance_issues(maya, sections, job)
+    assert [i.quote for i in issues] == [RETAIL]
+    assert "Kubernetes" not in issues[0].why
+
+
+def test_no_job_means_no_low_relevance() -> None:
+    maya = _demo_profile("student_profile_01")
+    issues = analyse_cv(maya, _cv_sections(maya), None)
+    assert not any(issue.type == "low_relevance" for issue in issues)
+
+
+@pytest.mark.parametrize(
+    ("description", "quote"),
+    [
+        ("Requirements: Experience with Docker.", "Docker"),
+        (
+            "Requirements: Docker experience, working knowledge and strong skills.",
+            "Docker experience",
+        ),
+    ],
+    ids=["lead-in", "generic-words"],
+)
+def test_docker_requirement_is_flagged_for_a_cv_without_docker(
+    description: str, quote: str
+) -> None:
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    # The generic words are now in the CV, so only Docker can address the item.
+    sections["Professional Summary"] += (
+        " Strong working knowledge and good basic experience and skills."
+    )
+    job = _job(description)
+    [issue] = _job_ad_issues(maya, sections, job)
+    assert (issue.type, issue.quote, issue.severity) == ("low_relevance", quote, "medium")
+    assert issue.quote in job["description"]
+    assert "doesn't mention it" in issue.why
+
+
+def test_docker_requirement_is_addressed_by_a_cv_with_docker() -> None:
+    noah = _demo_profile("student_profile_04")
+    job = _job("Requirements: Experience with Docker.")
+    assert _job_ad_issues(noah, _cv_sections(noah), job) == []
+
+
+def test_preferred_requirement_is_low() -> None:
+    maya = _demo_profile("student_profile_01")
+    issues = _job_ad_issues(
+        maya, _cv_sections(maya), _job("Requirements: Python. Nice to have: Kubernetes.")
+    )
+    assert [(i.quote, i.severity) for i in issues] == [("Kubernetes", "low")]
+    assert "lists Kubernetes as preferred" in issues[0].why
+
+
+def test_desirable_block_without_colon_is_preferred() -> None:
+    maya = _demo_profile("student_profile_01")
+    job = _job(
+        "Requirements: Python; familiarity with CI/CD. "
+        "Desirable experience includes Kubernetes, Terraform."
+    )
+    issues = _job_ad_issues(maya, _cv_sections(maya), job)
+    assert [(i.quote, i.severity) for i in issues] == [
+        ("CI/CD", "medium"),
+        ("Kubernetes", "low"),
+        ("Terraform", "low"),
+    ]
+
+
+def test_eligibility_clauses_are_skipped() -> None:
+    maya = _demo_profile("student_profile_01")
+    # Words Maya's CV lacks, so keeping these clauses would flag them.
+    job = _job(
+        "Requirements: A master's degree in astrophysics; a PhD or postgraduate "
+        "study in oceanography; Kafka."
+    )
+    assert [i.quote for i in _job_ad_issues(maya, _cv_sections(maya), job)] == ["Kafka"]
+
+
+@pytest.mark.parametrize("job_id", sorted(JOBS))
+def test_demo_jobs_never_flag_eligibility(job_id: str) -> None:
+    eligibility = re.compile(r"degree|bachelor|master|postgraduate|years?\b", re.I)
+    maya = _demo_profile("student_profile_01")
+    for issue in _job_ad_issues(maya, _cv_sections(maya, job_id), JOBS[job_id]):
+        assert not eligibility.search(issue.quote), issue.quote
+
+
+def test_requirement_issues_are_capped_required_first() -> None:
+    maya = _demo_profile("student_profile_01")
+    required = ["Rust", "Kafka", "Spark", "Hadoop", "Scala", "Erlang", "Haskell"]
+    job = _job(f"Nice to have: Elixir. Requirements: {', '.join(required)}.")
+    issues = _job_ad_issues(maya, _cv_sections(maya), job)
+    assert [i.quote for i in issues] == required[:MAX_REQUIREMENT_ISSUES]
+    assert all(issue.severity == "medium" for issue in issues)
+
+
+def test_requirements_list_from_the_job_ad_parser_is_used() -> None:
+    maya = _demo_profile("student_profile_01")
+    job = _job("", requirements=["Experience with Terraform", "Python"])
+    issues = _job_ad_issues(maya, _cv_sections(maya), job)
+    assert [(i.quote, i.severity) for i in issues] == [("Terraform", "medium")]
+
+
+# Standalone run: python -m app.cv_analyst <profile_id> <job_id>
+
+
+@pytest.mark.parametrize("document_id", DEMO_IDS)
+def test_standalone_split_matches_the_app(document_id: str) -> None:
+    job = JOBS[DEFAULT_JOB]
+    markdown = generate_cv_markdown(_demo_profile(document_id), job, job["description"])
+    assert _sections_from_markdown(markdown) == ui._split_cv_markdown(markdown)
+
+
+def test_standalone_run_prints_issues(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["student_profile_01", DEFAULT_JOB]) == 0
+    out = capsys.readouterr().out
+    assert out.startswith(
+        "Maya Chen (student_profile_01) vs Graduate AI Engineer (graduate_ai_engineer)"
+    )
+    assert "[medium] vague | Experience" in out
+    assert "low_relevance | Job ad" in out
+
+
+def test_standalone_run_json_matches_analyse_cv(capsys: pytest.CaptureFixture[str]) -> None:
+    assert main(["student_profile_01", DEFAULT_JOB, "--json"]) == 0
+    printed = json.loads(capsys.readouterr().out)
+    maya = _demo_profile("student_profile_01")
+    issues = analyse_cv(maya, _cv_sections(maya), JOBS[DEFAULT_JOB])
+    assert printed == [issue.model_dump() for issue in issues]
+
+
+@pytest.mark.parametrize(
+    "argv", [["nobody", DEFAULT_JOB], ["student_profile_01", "no_such_job"]]
+)
+def test_standalone_run_rejects_unknown_ids(argv: list[str]) -> None:
+    with pytest.raises(SystemExit) as exit_info:
+        main(argv)
+    assert exit_info.value.code == 2

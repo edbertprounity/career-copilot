@@ -3,21 +3,34 @@
 Python decides every issue. The confirmed profile is the ground truth, and
 cv_sections, the editor's current text keyed by section name, is what gets
 checked, so the student's own edits are analysed too.
+
+Standalone run, no Streamlit and no Gemini:
+    python -m app.cv_analyst <profile_id> <job_id> [--json]
 """
 
 from __future__ import annotations
 
+import argparse
 import hashlib
+import json
 import re
+import sys
 from collections.abc import Iterator
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Literal
 
 from pydantic import BaseModel
 
 from app.agent_engine import THIN_DESCRIPTION_WORDS, update_profile_field
-from app.cv_generator import LAYOUT_COMMENT_RE, profile_supports, ungrounded_terms
+from app.cv_generator import (
+    LAYOUT_COMMENT_RE,
+    generate_cv_markdown,
+    profile_supports,
+    ungrounded_terms,
+)
 from app.schemas import StudentProfile
+from app.vector_store import JOBS_PATH
 
 IssueType = Literal["vague", "no_evidence", "ungrounded_edit", "low_relevance"]
 Severity = Literal["high", "medium", "low"]
@@ -27,6 +40,11 @@ SKILLS_SECTION = "Skills"
 # Sections the generator writes as entries: a **bold** header line, then "- "
 # description bullets and an optional "- Technologies:" line.
 ITEM_SECTIONS = ("Projects", "Experience")
+# Section of low_relevance issues about job requirements the CV never
+# addresses. Their quote comes from the job ad, not the CV.
+JOB_AD_SECTION = "Job ad"
+MAX_REQUIREMENT_ISSUES = 5
+PROFILES_PATH = JOBS_PATH.parent / "student_profiles.jsonl"
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _HEADING_RE = re.compile(r"^#+\s*")
@@ -82,6 +100,45 @@ _STEM_SUFFIXES = ("ing", "ed", "s")
 _MIN_STEM = 3
 _TOKEN_EDGE_PUNCTUATION = ".,;:()[]!?\"'"
 
+# low_relevance: requirement blocks in a job ad. "Desirable experience
+# includes" opens a block mid-sentence, without a colon.
+_JOB_HEADER_RE = re.compile(
+    r"\b(?:preferred experience includes|desirable experience includes|"
+    r"(?:requirements|minimum qualifications|preferred qualifications|"
+    r"nice to have|preferred|desirable|responsibilities|about the role)\s*:)",
+    re.IGNORECASE,
+)
+_CLAUSE_SPLIT_RE = re.compile(r";|\n|(?<=\.)\s+")
+# Eligibility, not skills: evidence cannot address it, and judging it would
+# edge into predicting hiring.
+_ELIGIBILITY_RE = re.compile(
+    r"\b(?:degree|bachelor\w*|master\w*|phd|doctorate|postgraduate|years?|"
+    r"qualifications?)\b",
+    re.IGNORECASE,
+)
+_LEAD_IN_RE = re.compile(
+    r"^(?:and|or|a|an|the|strong|solid|firm|good|basic|working|proven|"
+    r"knowledge of|understanding of|experience (?:with|in)|familiarity with|"
+    r"proficiency (?:in|with)|ability to|at least one of|preferably in)\s+",
+    re.IGNORECASE,
+)
+# Words that say how much, not what, so they never count as addressing a
+# requirement: "Experience with Docker" needs Docker, not the word experience.
+_GENERIC_REQUIREMENT_WORDS = frozenset(
+    {
+        # The review's list.
+        "experience", "knowledge", "understanding", "skills", "skill",
+        "ability", "strong", "working", "familiarity", "proficiency", "good",
+        "basic", "solid",
+        # Grammar and degree words.
+        "and", "or", "the", "of", "in", "with", "for", "to", "on", "at", "by",
+        "as", "from", "into", "such", "including", "other", "any", "using",
+        "least", "one", "more", "preferably", "related", "similar", "modern",
+        "equivalent", "field", "fields",
+    }
+)
+_WORD_RE = re.compile(r"[A-Za-z0-9+#]+")
+
 
 class AnalysisIssue(BaseModel):
     issue_id: str
@@ -125,6 +182,7 @@ def analyse_cv(
         *_vague_issues(sections, profile),
         *_ungrounded_edit_issues(sections, profile, job_title),
         *_no_evidence_issues(sections, profile, job_title),
+        *_low_relevance_issues(sections, profile, job),
     ]
     _make_ids_unique(issues)
     section_rank = {name: index for index, name in enumerate(cv_sections)}
@@ -305,7 +363,11 @@ def _ungrounded_edit_issues(
                 issues.append(_ungrounded_issue(section, text, [text]))
             continue
         terms = _unsupported_terms(text, profile, job_title)
-        if terms:
+        if not terms:
+            continue
+        if _ACHIEVEMENT_RE.search(text):
+            issues.append(_ungrounded_achievement_issue(section, text))
+        else:
             issues.append(_ungrounded_issue(section, text, terms))
     return issues
 
@@ -340,6 +402,28 @@ def _ungrounded_issue(section: str, quote: str, terms: list[str]) -> AnalysisIss
             "example by attaching evidence of where you did it."
         ),
         question=f"Where {does} {named} come from?",
+    )
+
+
+def _ungrounded_achievement_issue(section: str, quote: str) -> AnalysisIssue:
+    """An achievement is one claim, so it is named as such, not word by word."""
+    return _issue(
+        "ungrounded_edit",
+        section,
+        quote,
+        "high",
+        why=(
+            "This achievement isn't in your confirmed profile, so nothing in "
+            "your CV backs it up."
+        ),
+        suggestion=(
+            "Remove it, or keep it only if you can back it up, for example by "
+            "attaching a certificate or record."
+        ),
+        question=(
+            "Where does this achievement come from, and do you have a "
+            "certificate or record for it?"
+        ),
     )
 
 
@@ -441,6 +525,190 @@ def _listed_skill_issue(section: str, skill: str, entry_title: str) -> AnalysisI
         ),
         question=f"What did you do with {skill} in {entry}?",
     )
+
+
+def _low_relevance_issues(
+    sections: dict[str, str], profile: StudentProfile, job: dict | None
+) -> list[AnalysisIssue]:
+    """Entries with no overlap with the job, and job requirements never addressed."""
+    if not job:
+        return []
+    description = str(job.get("description") or "")
+    return [
+        *_unrelated_entry_issues(sections, profile, description),
+        *_unaddressed_requirement_issues(sections, job),
+    ]
+
+
+def _unrelated_entry_issues(
+    sections: dict[str, str], profile: StudentProfile, description: str
+) -> list[AnalysisIssue]:
+    """Flag entries that mention none of the job skills the CV lists.
+
+    Job skills are the CV's Skills and Technologies items that the profile
+    supports and the job description mentions, the same overlap idea A1 uses
+    to order Projects and Experience. With none, every entry would be
+    flagged, so nothing is.
+    """
+    description_key = _stem_phrase(description)
+    listed = [text for _, kind, text in _cv_units(sections) if kind == "item"]
+    job_skills: list[str] = []
+    seen: set[str] = set()
+    for skill in listed:
+        key = _stem_phrase(skill)
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        if profile_supports(skill, profile) and _has_stemmed_phrase(description_key, key):
+            job_skills.append(skill)
+    if not job_skills:
+        return []
+
+    shown = job_skills[:3]
+    issues: list[AnalysisIssue] = []
+    for section in ITEM_SECTIONS:
+        for item in _parse_items(sections.get(section, "")):
+            quote = item.bullets[0] if item.bullets else item.title
+            if not quote:
+                continue
+            item_key = _stem_phrase(
+                " ".join([item.title, item.description, *item.technologies])
+            )
+            if any(_has_stemmed_phrase(item_key, _stem_phrase(s)) for s in job_skills):
+                continue
+            entry = _entry_name(section, item.title)
+            issues.append(
+                _issue(
+                    "low_relevance",
+                    section,
+                    quote,
+                    "low",
+                    why=(
+                        f"{entry[0].upper()}{entry[1:]} doesn't mention any of the "
+                        "skills this job asks for that your CV lists "
+                        f"({', '.join(shown)})."
+                    ),
+                    suggestion=(
+                        f"If this work used {_or_list(shown)}, say how. Otherwise "
+                        "keep it short or move it lower."
+                    ),
+                    question=f"Did {entry} involve {_or_list(shown)}?",
+                )
+            )
+    return issues
+
+
+def _unaddressed_requirement_issues(
+    sections: dict[str, str], job: dict
+) -> list[AnalysisIssue]:
+    """Flag job requirements that no word of the CV touches.
+
+    A requirement counts as addressed if any of its content words appears
+    anywhere in the CV. That is lenient on purpose: the analyst should
+    under-report gaps rather than invent them.
+    """
+    cv_text = " ".join(text for _, _, text in _cv_units(sections))
+    cv_words = {_stem(token.lower()) for token in _WORD_RE.findall(cv_text)}
+    issues: list[AnalysisIssue] = []
+    for item, preferred in _job_requirements(job):
+        words = _content_words(item)
+        if not words or words & cv_words:
+            continue
+        issues.append(
+            _issue(
+                "low_relevance",
+                JOB_AD_SECTION,
+                item,
+                "low" if preferred else "medium",
+                why=(
+                    f"The job ad lists {item}{' as preferred' if preferred else ''}, "
+                    "and your CV doesn't mention it."
+                ),
+                suggestion=(
+                    "If you have done this in a project, course or job, add it "
+                    "there. If not, leave it out rather than adding it to match."
+                ),
+                question=f"Have you done anything involving {item}, even in coursework?",
+            )
+        )
+        if len(issues) == MAX_REQUIREMENT_ISSUES:
+            break
+    return issues
+
+
+def _job_requirements(job: dict) -> list[tuple[str, bool]]:
+    """(item, preferred) pairs, required first, each item verbatim from the job.
+
+    A requirements list from the job-ad parser is used as is. Otherwise the
+    description's Requirements / Minimum qualifications blocks are required,
+    Preferred / Desirable / Nice to have blocks are preferred, and other
+    blocks (Responsibilities) are ignored; with no such header, the whole
+    description is required. Eligibility clauses are dropped.
+    """
+    listed = job.get("requirements")
+    if isinstance(listed, list) and listed:
+        blocks = [(str(entry), False) for entry in listed]
+    else:
+        blocks = _requirement_blocks(str(job.get("description") or ""))
+
+    items: list[tuple[str, bool]] = []
+    seen: set[str] = set()
+    for block, preferred in blocks:
+        for clause in _CLAUSE_SPLIT_RE.split(block):
+            if _ELIGIBILITY_RE.search(clause):
+                continue
+            for part in clause.split(","):
+                item = _strip_lead_ins(part.strip().rstrip("."))
+                key = _normalize(item)
+                if key and key not in seen:
+                    seen.add(key)
+                    items.append((item, preferred))
+    return sorted(items, key=lambda pair: pair[1])
+
+
+def _requirement_blocks(description: str) -> list[tuple[str, bool]]:
+    headers = list(_JOB_HEADER_RE.finditer(description))
+    blocks: list[tuple[str, bool]] = []
+    ends = [header.start() for header in headers[1:]] + [len(description)]
+    for header, end in zip(headers, ends, strict=True):
+        name = header.group(0).lower()
+        if "requirement" in name or "minimum" in name:
+            blocks.append((description[header.end() : end], False))
+        elif any(word in name for word in ("preferred", "desirable", "nice")):
+            blocks.append((description[header.end() : end], True))
+    return blocks or [(description, False)]
+
+
+def _strip_lead_ins(item: str) -> str:
+    """Drop openers such as "strong knowledge of", keeping a verbatim substring."""
+    while True:
+        match = _LEAD_IN_RE.match(item)
+        if not match:
+            return item
+        item = item[match.end() :]
+
+
+def _content_words(text: str) -> set[str]:
+    """Stemmed words that say what a requirement is about.
+
+    Kept: non-generic words of three or more letters, and two-letter
+    acronyms (AI, ML, CI).
+    """
+    words: set[str] = set()
+    for token in _WORD_RE.findall(text):
+        lowered = token.lower()
+        if lowered in _GENERIC_REQUIREMENT_WORDS:
+            continue
+        if len(token) < 3 and not token.isupper():
+            continue
+        words.add(_stem(lowered))
+    return words
+
+
+def _or_list(items: list[str]) -> str:
+    if len(items) <= 1:
+        return "".join(items)
+    return f"{', '.join(items[:-1])} or {items[-1]}"
 
 
 def _cv_units(sections: dict[str, str]) -> Iterator[tuple[str, str, str]]:
@@ -609,3 +877,95 @@ def _contains_phrase(text: str, phrase: str) -> bool:
         return False
     pattern = rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])"
     return re.search(pattern, _normalize(text)) is not None
+
+
+def _sections_from_markdown(markdown: str) -> dict[str, str]:
+    """Split CV markdown into editor sections, as streamlit_app does.
+
+    Text before the first "## " heading is filed under "Summary". Kept here so
+    the standalone run needs no Streamlit; a test pins it to the app's split.
+    """
+    sections: dict[str, str] = {}
+    current = "Summary"
+    buffer: list[str] = []
+    for line in markdown.splitlines():
+        if line.startswith("## "):
+            text = "\n".join(buffer).strip()
+            if text:
+                sections[current] = text
+            current = line[3:].strip()
+            buffer = []
+        else:
+            buffer.append(line)
+    text = "\n".join(buffer).strip()
+    if text:
+        sections[current] = text
+    return sections
+
+
+def _read_jsonl(path: Path) -> dict[str, dict]:
+    lines = path.read_text(encoding="utf-8").splitlines()
+    rows = (json.loads(line) for line in lines if line.strip())
+    return {row["document_id"]: row for row in rows}
+
+
+def _format_report(profile: StudentProfile, job: dict, issues: list[AnalysisIssue]) -> str:
+    counts = ", ".join(
+        f"{sum(issue.severity == level for issue in issues)} {level}"
+        for level in SEVERITY_ORDER
+    )
+    lines = [
+        f"{profile.name} ({profile.document_id}) vs {job['title']} ({job['document_id']})",
+        f"{len(issues)} issues: {counts}",
+    ]
+    for number, issue in enumerate(issues, start=1):
+        lines += [
+            "",
+            f"{number}. [{issue.severity}] {issue.type} | {issue.section}",
+            f"   quote:      {issue.quote}",
+            f"   why:        {issue.why}",
+            f"   suggestion: {issue.suggestion}",
+            f"   question:   {issue.question}",
+        ]
+    return "\n".join(lines)
+
+
+def main(argv: list[str] | None = None) -> int:
+    """Analyse a demo profile's generated CV against one job and print the issues.
+
+    The CV is built the way the app builds it, with the template summary, so
+    the run is deterministic: no Streamlit and no Gemini.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m app.cv_analyst",
+        description="Print CV analyst issues for a demo profile and job.",
+    )
+    parser.add_argument("profile_id", help="e.g. student_profile_01")
+    parser.add_argument("job_id", help="e.g. graduate_ai_engineer")
+    parser.add_argument("--json", action="store_true", help="print the issues as JSON")
+    args = parser.parse_args(argv)
+
+    profiles = _read_jsonl(PROFILES_PATH)
+    jobs = _read_jsonl(JOBS_PATH)
+    if args.profile_id not in profiles:
+        parser.error(f"unknown profile_id; choose from {', '.join(sorted(profiles))}")
+    if args.job_id not in jobs:
+        parser.error(f"unknown job_id; choose from {', '.join(sorted(jobs))}")
+
+    profile = StudentProfile.model_validate(profiles[args.profile_id])
+    profile.is_confirmed = True
+    job = jobs[args.job_id]
+    markdown = generate_cv_markdown(profile, job, job["description"])
+    issues = analyse_cv(profile, _sections_from_markdown(markdown), job)
+
+    if args.json:
+        dumped = [issue.model_dump() for issue in issues]
+        print(json.dumps(dumped, indent=2, ensure_ascii=False))
+    else:
+        print(_format_report(profile, job, issues))
+    return 0
+
+
+if __name__ == "__main__":
+    sys.stdout.reconfigure(encoding="utf-8")
+    raise SystemExit(main())

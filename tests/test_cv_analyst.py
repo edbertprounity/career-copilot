@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 from pydantic import ValidationError
 
+import app.cv_analyst as cv_analyst
 import app.llm_client as llm_client
 import streamlit_app as ui
 from app.agent_engine import detect_thin_content
@@ -18,6 +19,7 @@ from app.cv_analyst import (
     JOB_AD_SECTION,
     MAX_REQUIREMENT_ISSUES,
     SEVERITY_ORDER,
+    UNAVAILABLE_RETRY_SECONDS,
     AnalysisIssue,
     _parse_items,
     _sections_from_markdown,
@@ -893,18 +895,47 @@ def _echo_feedback(payload: dict) -> dict:
 class _GeminiStub:
     """Stands in for app.llm_client: records each call, answers from the payload."""
 
-    def __init__(self, monkeypatch, respond=_echo_feedback, error=None) -> None:
+    def __init__(
+        self, monkeypatch, respond=_echo_feedback, error=None, errors=None
+    ) -> None:
+        """error is raised on every call; errors are raised one per call, first."""
         self.calls: list[dict] = []
         self.respond = respond
         self.error = error
+        self.errors = list(errors or [])
         monkeypatch.setattr(llm_client, "get_gemini_client", lambda: "stub-client")
         monkeypatch.setattr(llm_client, "call_gemini_json", self)
 
     def __call__(self, client, **kwargs) -> dict:
         self.calls.append(kwargs)
+        if self.errors:
+            raise self.errors.pop(0)
         if self.error is not None:
             raise self.error
         return self.respond(json.loads(kwargs["user_content"]))
+
+
+class _SdkError(Exception):
+    """Stands in for google.genai.errors.ServerError, which carries .code."""
+
+    def __init__(self, code: int) -> None:
+        super().__init__(str(code))
+        self.code = code
+
+
+def _api_error(code: int, status: str = "UNAVAILABLE") -> llm_client.GeminiAPIError:
+    """What llm_client raises: its own error, with the SDK error as the cause."""
+    error = llm_client.GeminiAPIError(f"Gemini generate_content failed: {code} {status}.")
+    error.__cause__ = _SdkError(code)
+    return error
+
+
+@pytest.fixture
+def sleeps(monkeypatch: pytest.MonkeyPatch) -> list[float]:
+    """Record retry waits instead of sleeping."""
+    recorded: list[float] = []
+    monkeypatch.setattr(cv_analyst.time, "sleep", recorded.append)
+    return recorded
 
 
 def _maya_run(job: dict | None = None, sections: dict[str, str] | None = None):
@@ -1194,3 +1225,66 @@ def test_numbers_from_the_issue_and_placeholders_are_allowed(
     assert "43007" in _cv_sections(_demo_profile("student_profile_01"))["Projects"]
     assert flask.suggestion == text
     assert diagnostics["issues"][flask.issue_id]["source"] == "gemini"
+
+
+def test_busy_model_is_retried_once_then_used(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    stub = _GeminiStub(monkeypatch, errors=[_api_error(503)])
+    issues, _, diagnostics = _maya_run()
+    assert len(stub.calls) == 2
+    assert sleeps == [UNAVAILABLE_RETRY_SECONDS] == [2]
+    assert (diagnostics["path"], diagnostics["retries"]) == ("gemini", 1)
+    assert all(issue.why.startswith("llm-written") for issue in issues)
+
+
+def test_busy_model_twice_falls_back(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float]
+) -> None:
+    stub = _GeminiStub(monkeypatch, errors=[_api_error(503), _api_error(503)])
+    issues, template, diagnostics = _maya_run()
+    assert len(stub.calls) == 2
+    assert sleeps == [2]
+    assert [i.model_dump() for i in issues] == [t.model_dump() for t in template]
+    assert (diagnostics["path"], diagnostics["reason"], diagnostics["retries"]) == (
+        "template",
+        "api",
+        1,
+    )
+    assert "503 UNAVAILABLE" in diagnostics["detail"]
+
+
+@pytest.mark.parametrize(
+    "error",
+    [
+        _api_error(429, "RESOURCE_EXHAUSTED"),
+        llm_client.GeminiAPIError("quota exceeded"),
+        llm_client.GeminiJSONParseError("not JSON"),
+    ],
+    ids=["api-429", "api-no-cause", "parse"],
+)
+def test_only_a_busy_model_is_retried(
+    monkeypatch: pytest.MonkeyPatch, sleeps: list[float], error: Exception
+) -> None:
+    stub = _GeminiStub(monkeypatch, errors=[error])
+    _, _, diagnostics = _maya_run()
+    assert len(stub.calls) == 1
+    assert sleeps == []
+    assert diagnostics["retries"] == 0
+    assert diagnostics["path"] == "template"
+
+
+def test_report_prints_a_batch_error_once(
+    monkeypatch: pytest.MonkeyPatch,
+    capsys: pytest.CaptureFixture[str],
+    sleeps: list[float],
+) -> None:
+    _GeminiStub(monkeypatch, error=_api_error(503))
+    assert main(["student_profile_01", DEFAULT_JOB, "--gemini"]) == 0
+    out = capsys.readouterr().out
+    assert out.count("generate_content failed") == 1
+    [text_line] = [line for line in out.splitlines() if line.startswith("Text: ")]
+    assert "retried once after 503 UNAVAILABLE" in text_line
+    assert "batch error: Gemini generate_content failed: 503 UNAVAILABLE." in text_line
+    per_issue = [line for line in out.splitlines() if line.startswith("   text:")]
+    assert per_issue and set(per_issue) == {"   text:       template (api)"}

@@ -1,0 +1,80 @@
+Maya Chen (student_profile_01) vs Graduate AI Engineer (graduate_ai_engineer)
+11 issues: 0 high, 6 medium, 5 low
+Text: Gemini for 0 of 11 issues; template for 11 (api 11)
+
+1. [medium] vague | Experience
+   quote:      Handled customer questions, worked with a small team during busy periods and followed written procedures.
+   why:        This says what you did, but not which tool you used, how big the work was, or what came of it.
+   suggestion: Add one detail you can back up: a tool, a number (people, requests, records), or a result.
+   question:   In the Customer Service Assistant role, what did you use, how much did you handle, and what changed because of your work?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+2. [medium] low_relevance | Job ad
+   quote:      machine-learning fundamentals
+   why:        The job ad asks for "machine-learning fundamentals", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "machine-learning fundamentals", even in coursework?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+3. [medium] low_relevance | Job ad
+   quote:      statistics
+   why:        The job ad asks for "statistics", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "statistics", even in coursework?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+4. [medium] low_relevance | Job ad
+   quote:      data analysis
+   why:        The job ad asks for "data analysis", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "data analysis", even in coursework?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+5. [medium] low_relevance | Job ad
+   quote:      LLMs
+   why:        The job ad asks for "LLMs", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "LLMs", even in coursework?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+6. [medium] low_relevance | Job ad
+   quote:      RAG
+   why:        The job ad asks for "RAG", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "RAG", even in coursework?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+7. [low] no_evidence | Projects
+   quote:      Flask
+   why:        Flask is listed for the Team Course Planner project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used Flask in the Team Course Planner project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with Flask in the Team Course Planner project?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+8. [low] no_evidence | Projects
+   quote:      SQLite
+   why:        SQLite is listed for the Team Course Planner project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used SQLite in the Team Course Planner project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with SQLite in the Team Course Planner project?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+9. [low] no_evidence | Projects
+   quote:      prompt design
+   why:        prompt design is listed for the AI Coursework Prototype project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used prompt design in the AI Coursework Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with prompt design in the AI Coursework Prototype project?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+10. [low] no_evidence | Projects
+   quote:      JSON
+   why:        JSON is listed for the AI Coursework Prototype project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used JSON in the AI Coursework Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with JSON in the AI Coursework Prototype project?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})
+
+11. [low] low_relevance | Experience
+   quote:      Handled customer questions, worked with a small team during busy periods and followed written procedures.
+   why:        The Customer Service Assistant role doesn't mention any of the skills this job asks for that your CV lists (Python).
+   suggestion: If this work used Python, name it and say what you did with it. If it didn't, you don't need to change this entry.
+   question:   Did the Customer Service Assistant role involve Python?
+   text:       template (api: Gemini generate_content failed: 503 UNAVAILABLE. {'error': {'code': 503, 'message': 'This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.', 'status': 'UNAVAILABLE'}})

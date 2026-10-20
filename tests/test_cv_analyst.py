@@ -1136,3 +1136,61 @@ def test_standalone_run_gemini_flag_opts_in(
     assert re.search(r"Text: Gemini for (\d+) of \1 issues", out)
     assert "llm-written" in out
     assert "   text:       gemini" in out
+
+
+@pytest.mark.parametrize("placeholder", ["[name]", "[Name]"])
+def test_name_placeholder_becomes_the_first_name(
+    monkeypatch: pytest.MonkeyPatch, placeholder: str
+) -> None:
+    _GeminiStub(
+        monkeypatch,
+        _first_issue_changed("why", f"{placeholder}, this line is easy to miss."),
+    )
+    issues, _, diagnostics = _maya_run()
+    assert issues[0].why == "Maya, this line is easy to miss."
+    assert diagnostics["issues"][issues[0].issue_id]["source"] == "gemini"
+    shown = " ".join(f"{i.why} {i.suggestion} {i.question}" for i in issues)
+    assert "[name]" not in shown.lower()
+
+
+def test_name_placeholder_without_a_name_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    _GeminiStub(
+        monkeypatch, _first_issue_changed("why", "[name], this line is easy to miss.")
+    )
+    nameless = _demo_profile("student_profile_01")
+    nameless.name = ""
+    sections = _cv_sections(nameless)
+    template = analyse_cv(nameless, sections, JOBS[DEFAULT_JOB], use_gemini=False)
+    diagnostics: dict = {}
+    issues = analyse_cv(nameless, sections, JOBS[DEFAULT_JOB], diagnostics=diagnostics)
+    assert issues[0].model_dump() == template[0].model_dump()
+    assert diagnostics["issues"][issues[0].issue_id]["reason"] == "name_placeholder"
+
+
+def test_invented_number_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    invented = "Say you served 50 customers a shift."
+    _GeminiStub(monkeypatch, _first_issue_changed("suggestion", invented))
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    entry = diagnostics["issues"][issues[0].issue_id]
+    assert (entry["reason"], entry["detail"]) == ("invented_number", "suggestion: 50")
+
+
+def test_numbers_from_the_issue_and_placeholders_are_allowed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    text = "llm-written: add a Flask line from the 43007 work, such as [e.g. 3 endpoints]."
+
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        for item in response["issues"]:
+            if item["quote"] == "Flask":
+                item["suggestion"] = text
+        return response
+
+    _GeminiStub(monkeypatch, respond)
+    issues, _, diagnostics = _maya_run()
+    [flask] = [i for i in issues if i.quote == "Flask"]
+    assert "43007" in _cv_sections(_demo_profile("student_profile_01"))["Projects"]
+    assert flask.suggestion == text
+    assert diagnostics["issues"][flask.issue_id]["source"] == "gemini"

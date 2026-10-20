@@ -105,6 +105,12 @@ _BANNED_WORDING_RE = re.compile(
     r"your chances|not a fit)\b",
     re.IGNORECASE,
 )
+# Redaction sends [name]; Gemini may echo it, so kept text gets the first name.
+_NAME_PLACEHOLDER_RE = re.compile(r"\[name\]", re.IGNORECASE)
+# Rule 2 for numbers: a figure in digits must come from the issue itself.
+# Bracketed placeholders such as [number of users] are removed first.
+_DIGIT_NUMBER_RE = re.compile(r"\d+(?:[.,]\d+)*")
+_PLACEHOLDER_RE = re.compile(r"\[[^\]]*\]")
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _HEADING_RE = re.compile(r"^#+\s*")
@@ -1049,12 +1055,15 @@ def _gemini_rewrite(
         if item is None:
             entry["reason"] = "missing"
             continue
-        problem = _feedback_problem(issue, payload["quote"], item, profile, job_title)
+        fields = {name: _fill_name(item.get(name), profile) for name in FEEDBACK_FIELDS}
+        problem = _feedback_problem(
+            issue, payload, item.get("quote"), fields, profile, job_title
+        )
         if problem is not None:
             entry["reason"], entry["detail"] = problem
             continue
         issue.why, issue.suggestion, issue.question = (
-            item[name].strip() for name in FEEDBACK_FIELDS
+            fields[name].strip() for name in FEEDBACK_FIELDS
         )
         entry["source"] = "gemini"
     return "", ""
@@ -1078,33 +1087,45 @@ def _payload_issue(
 
 def _feedback_problem(
     issue: AnalysisIssue,
-    sent_quote: str,
-    item: dict,
+    payload: dict,
+    returned_quote: object,
+    fields: dict[str, object],
     profile: StudentProfile,
     job_title: str,
 ) -> tuple[str, str] | None:
     """Why Gemini's text for this issue cannot be used, or None if it can.
 
-    It must echo the quote it was given, so text cannot drift to another
-    issue. Each field must be a short non-empty string with no banned
-    wording, and every claim in it must be supported by the profile or
-    already appear in the issue's own quote, draft or section name.
+    fields are the texts the student would see, [name] already filled. The
+    response must echo the quote it was given, so text cannot drift to
+    another issue. Each field must be a short non-empty string with no
+    banned wording and no number in digits that the issue's quote, context
+    or draft does not already contain, and every claim in it must be
+    supported by the profile or already appear in the issue's own quote,
+    draft or section name.
     """
-    returned_quote = str(item.get("quote") or "").strip().strip('"')
-    if " ".join(returned_quote.split()) != " ".join(sent_quote.split()):
-        return "quote_mismatch", returned_quote[:80]
+    echoed = str(returned_quote or "").strip().strip('"')
+    if " ".join(echoed.split()) != " ".join(payload["quote"].split()):
+        return "quote_mismatch", echoed[:80]
     allowed = _stem_phrase(
         " ".join([issue.quote, issue.section, *(getattr(issue, n) for n in FEEDBACK_FIELDS)])
     )
+    known_numbers = _digit_numbers(
+        " ".join([payload["quote"], payload["context"], *payload["draft"].values()])
+    )
     for name in FEEDBACK_FIELDS:
-        text = item.get(name)
+        text = fields[name]
         if not isinstance(text, str) or not text.strip():
             return "empty_field", name
         if len(text) > MAX_FIELD_CHARS:
             return "too_long", f"{name}: {len(text)} characters"
+        if _NAME_PLACEHOLDER_RE.search(text):
+            return "name_placeholder", name
         banned = _BANNED_WORDING_RE.search(text)
         if banned:
             return "banned", f"{name}: {banned.group(0)}"
+        invented = sorted(_digit_numbers(_PLACEHOLDER_RE.sub("", text)) - known_numbers)
+        if invented:
+            return "invented_number", f"{name}: {', '.join(invented)}"
         unsupported = [
             term
             for term in _unsupported_terms(text, profile, job_title)
@@ -1113,6 +1134,23 @@ def _feedback_problem(
         if unsupported:
             return "ungrounded", f"{name}: {', '.join(unsupported)}"
     return None
+
+
+def _fill_name(text: object, profile: StudentProfile) -> object:
+    """Put the student's first name where Gemini echoed [name].
+
+    With no name on the profile the placeholder stays, and the field is
+    rejected rather than shown with a placeholder in it.
+    """
+    first = (profile.name.split() or [""])[0]
+    if not isinstance(text, str) or not first:
+        return text
+    return _NAME_PLACEHOLDER_RE.sub(first, text)
+
+
+def _digit_numbers(text: str) -> set[str]:
+    """Numbers written in digits, commas dropped: "1,000" and "1000" match."""
+    return {match.group(0).replace(",", "") for match in _DIGIT_NUMBER_RE.finditer(text)}
 
 
 def _redact(text: str, profile: StudentProfile) -> str:

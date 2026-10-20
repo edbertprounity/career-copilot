@@ -2,10 +2,12 @@
 
 Python decides every issue. The confirmed profile is the ground truth, and
 cv_sections, the editor's current text keyed by section name, is what gets
-checked, so the student's own edits are analysed too.
+checked, so the student's own edits are analysed too. Gemini only rewrites
+each issue's why, suggestion and question, and every rewritten field is
+checked; a field that fails keeps the issue's template text.
 
-Standalone run, no Streamlit and no Gemini:
-    python -m app.cv_analyst <profile_id> <job_id> [--json]
+Standalone run, no Streamlit, deterministic unless --gemini is given:
+    python -m app.cv_analyst <profile_id> <job_id> [--json] [--gemini]
 """
 
 from __future__ import annotations
@@ -22,6 +24,9 @@ from typing import Literal
 
 from pydantic import BaseModel
 
+# Called through the module (llm_client.call_gemini_json), so the test
+# suite's stub on app.llm_client also covers this module.
+from app import llm_client
 from app.agent_engine import THIN_DESCRIPTION_WORDS, update_profile_field
 from app.cv_generator import (
     LAYOUT_COMMENT_RE,
@@ -45,6 +50,61 @@ ITEM_SECTIONS = ("Projects", "Experience")
 JOB_AD_SECTION = "Job ad"
 MAX_REQUIREMENT_ISSUES = 5
 PROFILES_PATH = JOBS_PATH.parent / "student_profiles.jsonl"
+
+# Gemini feedback. The template text doubles as the draft Gemini rewrites, so
+# the draft carries every fact the issue rests on.
+FEEDBACK_FIELDS = ("why", "suggestion", "question")
+MAX_FIELD_CHARS = 300
+# The name line and contact details never leave the machine.
+_PRIVATE_SECTIONS = frozenset({"Summary", "Contact"})
+_FEEDBACK_SYSTEM_INSTRUCTION = (
+    "You write feedback for problems that a Python checker has already found in "
+    "a student's CV. You never find new problems, and you never change an "
+    "issue's type, severity or quote. Each issue comes with its quote (the CV "
+    "text it is about, or for section 'Job ad' the job ad's words), context (the "
+    "CV section it sits in, possibly empty) and a draft why, suggestion and "
+    "question that state its facts. Rewrite the draft to be specific and "
+    "encouraging. why: one sentence on why this weakens the CV for a reader. "
+    "suggestion: one concrete edit, using only facts in the quote, context and "
+    "draft; where a fact is missing, write a bracketed placeholder such as "
+    "[number of users] instead of inventing one. question: one question that "
+    "asks the student for the missing fact. Rules: never say or imply that the "
+    "student lacks a skill or experience; say it is not shown in the CV. Never "
+    "predict hiring, shortlisting, or what an employer will think or do. Do not "
+    "name any technology, employer, number, award or result that is not in the "
+    "quote, context or draft. For ungrounded_edit, suggest removing the text or "
+    "backing it up with evidence, never expanding it. Keep each field under 40 "
+    "words. Return every issue exactly once with its issue_id and its quote "
+    "copied exactly. Reply with JSON only."
+)
+_FEEDBACK_RESPONSE_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "issues": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "issue_id": {"type": "STRING"},
+                    "quote": {"type": "STRING"},
+                    "why": {"type": "STRING"},
+                    "suggestion": {"type": "STRING"},
+                    "question": {"type": "STRING"},
+                },
+                "required": ["issue_id", "quote", "why", "suggestion", "question"],
+            },
+        },
+    },
+    "required": ["issues"],
+}
+# Rule 3 of the brief, enforced on Gemini text: no claim that the student lacks
+# something and no prediction about hiring.
+_BANNED_WORDING_RE = re.compile(
+    r"\b(?:lack\w*|(?:do not|don't|dont) have|not qualified|unqualified|"
+    r"hir(?:e|ed|es|ing)|employers? will|shortlist\w*|reject\w*|"
+    r"your chances|not a fit)\b",
+    re.IGNORECASE,
+)
 
 _BOLD_RE = re.compile(r"\*\*(.+?)\*\*")
 _HEADING_RE = re.compile(r"^#+\s*")
@@ -171,13 +231,22 @@ class _CvItem:
 
 
 def analyse_cv(
-    profile: StudentProfile, cv_sections: dict[str, str], job: dict | None
+    profile: StudentProfile,
+    cv_sections: dict[str, str],
+    job: dict | None,
+    *,
+    use_gemini: bool = True,
+    diagnostics: dict | None = None,
 ) -> list[AnalysisIssue]:
     """Return the CV's issues, most severe first, then in CV section order.
 
     profile is the confirmed ground truth, cv_sections the editor's text by
     section name, and job the selected job (title and description) or None.
     The generator's layout comment is stripped first, so no check sees it.
+
+    With use_gemini and a client available, one batched Gemini call rewrites
+    the issues' text. diagnostics, when given, is filled with where each
+    issue's text came from and why, so a caller can show it.
     """
     sections = {
         name: LAYOUT_COMMENT_RE.sub("", text) for name, text in cv_sections.items()
@@ -191,13 +260,16 @@ def analyse_cv(
     ]
     _make_ids_unique(issues)
     section_rank = {name: index for index, name in enumerate(cv_sections)}
-    return sorted(
-        issues,
+    issues.sort(
         key=lambda issue: (
             SEVERITY_ORDER.index(issue.severity),
             section_rank.get(issue.section, len(section_rank)),
         ),
     )
+    report = _write_feedback(issues, sections, profile, job_title, use_gemini)
+    if diagnostics is not None:
+        diagnostics.update(report)
+    return issues
 
 
 def add_skill_evidence(profile: StudentProfile, skill: str, source: str) -> dict:
@@ -889,6 +961,169 @@ def _contains_phrase(text: str, phrase: str) -> bool:
     return re.search(pattern, _normalize(text)) is not None
 
 
+def _write_feedback(
+    issues: list[AnalysisIssue],
+    sections: dict[str, str],
+    profile: StudentProfile,
+    job_title: str,
+    use_gemini: bool,
+) -> dict:
+    """Let Gemini rewrite the issues' text; keep the template wherever it fails.
+
+    Returns diagnostics: path (gemini, partial or template), the batch-level
+    reason and detail, and per issue_id its source (gemini or template) with
+    the reason it fell back.
+    """
+    per_issue = {
+        issue.issue_id: {"source": "template", "reason": "", "detail": ""}
+        for issue in issues
+    }
+    reason, detail = _gemini_rewrite(
+        issues, sections, profile, job_title, use_gemini, per_issue
+    )
+    for entry in per_issue.values():
+        if entry["source"] == "template" and not entry["reason"]:
+            entry["reason"] = reason
+            entry["detail"] = detail
+    from_gemini = sum(entry["source"] == "gemini" for entry in per_issue.values())
+    if from_gemini == 0:
+        path = "template"
+    elif from_gemini == len(issues):
+        path = "gemini"
+    else:
+        path = "partial"
+    return {"path": path, "reason": reason, "detail": detail, "issues": per_issue}
+
+
+def _gemini_rewrite(
+    issues: list[AnalysisIssue],
+    sections: dict[str, str],
+    profile: StudentProfile,
+    job_title: str,
+    use_gemini: bool,
+    per_issue: dict[str, dict],
+) -> tuple[str, str]:
+    """One batched call. Returns a batch-level (reason, detail), empty on success."""
+    if not issues:
+        return "no_issues", ""
+    if not use_gemini:
+        return "disabled", ""
+    sendable = []
+    for issue in issues:
+        if issue.section in _PRIVATE_SECTIONS:
+            per_issue[issue.issue_id]["reason"] = "private_section"
+        else:
+            sendable.append(issue)
+    if not sendable:
+        return "private_section", ""
+    client = llm_client.get_gemini_client()
+    if client is None:
+        return "no_client", ""
+
+    sent = [_payload_issue(issue, sections, profile) for issue in sendable]
+    try:
+        parsed = llm_client.call_gemini_json(
+            client,
+            system_instruction=_FEEDBACK_SYSTEM_INSTRUCTION,
+            user_content=json.dumps(
+                {"job_title": job_title, "issues": sent}, ensure_ascii=False
+            ),
+            response_schema=_FEEDBACK_RESPONSE_SCHEMA,
+        )
+    except llm_client.GeminiAPIError as exc:
+        return "api", str(exc)
+    except llm_client.GeminiJSONParseError as exc:
+        return "parse", str(exc)
+
+    returned = parsed.get("issues")
+    if not isinstance(returned, list):
+        return "empty", f"no issues list (got {type(returned).__name__})"
+    by_id: dict[str, dict] = {}
+    for item in returned:
+        if isinstance(item, dict) and isinstance(item.get("issue_id"), str):
+            by_id.setdefault(item["issue_id"], item)
+
+    for issue, payload in zip(sendable, sent, strict=True):
+        entry = per_issue[issue.issue_id]
+        item = by_id.get(issue.issue_id)
+        if item is None:
+            entry["reason"] = "missing"
+            continue
+        problem = _feedback_problem(issue, payload["quote"], item, profile, job_title)
+        if problem is not None:
+            entry["reason"], entry["detail"] = problem
+            continue
+        issue.why, issue.suggestion, issue.question = (
+            item[name].strip() for name in FEEDBACK_FIELDS
+        )
+        entry["source"] = "gemini"
+    return "", ""
+
+
+def _payload_issue(
+    issue: AnalysisIssue, sections: dict[str, str], profile: StudentProfile
+) -> dict:
+    """What Gemini sees of one issue, with the student's name redacted."""
+    context = "" if issue.section == JOB_AD_SECTION else sections.get(issue.section, "")
+    return {
+        "issue_id": issue.issue_id,
+        "type": issue.type,
+        "severity": issue.severity,
+        "section": issue.section,
+        "quote": _redact(issue.quote, profile),
+        "context": _redact(context, profile),
+        "draft": {name: _redact(getattr(issue, name), profile) for name in FEEDBACK_FIELDS},
+    }
+
+
+def _feedback_problem(
+    issue: AnalysisIssue,
+    sent_quote: str,
+    item: dict,
+    profile: StudentProfile,
+    job_title: str,
+) -> tuple[str, str] | None:
+    """Why Gemini's text for this issue cannot be used, or None if it can.
+
+    It must echo the quote it was given, so text cannot drift to another
+    issue. Each field must be a short non-empty string with no banned
+    wording, and every claim in it must be supported by the profile or
+    already appear in the issue's own quote, draft or section name.
+    """
+    returned_quote = str(item.get("quote") or "").strip().strip('"')
+    if " ".join(returned_quote.split()) != " ".join(sent_quote.split()):
+        return "quote_mismatch", returned_quote[:80]
+    allowed = _stem_phrase(
+        " ".join([issue.quote, issue.section, *(getattr(issue, n) for n in FEEDBACK_FIELDS)])
+    )
+    for name in FEEDBACK_FIELDS:
+        text = item.get(name)
+        if not isinstance(text, str) or not text.strip():
+            return "empty_field", name
+        if len(text) > MAX_FIELD_CHARS:
+            return "too_long", f"{name}: {len(text)} characters"
+        banned = _BANNED_WORDING_RE.search(text)
+        if banned:
+            return "banned", f"{name}: {banned.group(0)}"
+        unsupported = [
+            term
+            for term in _unsupported_terms(text, profile, job_title)
+            if not _has_stemmed_phrase(allowed, _stem_phrase(term))
+        ]
+        if unsupported:
+            return "ungrounded", f"{name}: {', '.join(unsupported)}"
+    return None
+
+
+def _redact(text: str, profile: StudentProfile) -> str:
+    """Replace the student's full name and each part of it with [name]."""
+    full = profile.name.strip()
+    parts = {full, *full.split()}
+    for part in sorted((p for p in parts if len(p) >= 2), key=len, reverse=True):
+        text = re.sub(rf"\b{re.escape(part)}\b", "[name]", text)
+    return text
+
+
 def _sections_from_markdown(markdown: str) -> dict[str, str]:
     """Split CV markdown into editor sections, as streamlit_app does.
 
@@ -919,7 +1154,13 @@ def _read_jsonl(path: Path) -> dict[str, dict]:
     return {row["document_id"]: row for row in rows}
 
 
-def _format_report(profile: StudentProfile, job: dict, issues: list[AnalysisIssue]) -> str:
+def _format_report(
+    profile: StudentProfile,
+    job: dict,
+    issues: list[AnalysisIssue],
+    diagnostics: dict,
+    show_sources: bool,
+) -> str:
     counts = ", ".join(
         f"{sum(issue.severity == level for issue in issues)} {level}"
         for level in SEVERITY_ORDER
@@ -927,7 +1168,9 @@ def _format_report(profile: StudentProfile, job: dict, issues: list[AnalysisIssu
     lines = [
         f"{profile.name} ({profile.document_id}) vs {job['title']} ({job['document_id']})",
         f"{len(issues)} issues: {counts}",
+        f"Text: {_source_summary(diagnostics, len(issues))}",
     ]
+    per_issue = diagnostics.get("issues") or {}
     for number, issue in enumerate(issues, start=1):
         lines += [
             "",
@@ -937,14 +1180,41 @@ def _format_report(profile: StudentProfile, job: dict, issues: list[AnalysisIssu
             f"   suggestion: {issue.suggestion}",
             f"   question:   {issue.question}",
         ]
+        if show_sources:
+            source = _source_label(per_issue.get(issue.issue_id) or {})
+            lines.append(f"   text:       {source}")
     return "\n".join(lines)
+
+
+def _source_summary(diagnostics: dict, total: int) -> str:
+    if diagnostics.get("reason") == "disabled":
+        return f"template for all {total} issues (Gemini not requested; add --gemini)"
+    entries = list((diagnostics.get("issues") or {}).values())
+    from_gemini = sum(entry["source"] == "gemini" for entry in entries)
+    summary = f"Gemini for {from_gemini} of {total} issues"
+    fallbacks: dict[str, int] = {}
+    for entry in entries:
+        if entry["source"] == "template":
+            fallbacks[entry["reason"]] = fallbacks.get(entry["reason"], 0) + 1
+    if fallbacks:
+        listed = ", ".join(f"{reason} {count}" for reason, count in fallbacks.items())
+        summary += f"; template for {total - from_gemini} ({listed})"
+    return summary
+
+
+def _source_label(entry: dict) -> str:
+    if entry.get("source") == "gemini":
+        return "gemini"
+    detail = f": {entry['detail']}" if entry.get("detail") else ""
+    return f"template ({entry.get('reason') or 'unknown'}{detail})"
 
 
 def main(argv: list[str] | None = None) -> int:
     """Analyse a demo profile's generated CV against one job and print the issues.
 
-    The CV is built the way the app builds it, with the template summary, so
-    the run is deterministic: no Streamlit and no Gemini.
+    The CV is built the way the app builds it, with the template summary.
+    The run is deterministic, no Streamlit and no Gemini, unless --gemini asks
+    for one batched Gemini call to rewrite the issues' text.
     """
     parser = argparse.ArgumentParser(
         prog="python -m app.cv_analyst",
@@ -953,6 +1223,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("profile_id", help="e.g. student_profile_01")
     parser.add_argument("job_id", help="e.g. graduate_ai_engineer")
     parser.add_argument("--json", action="store_true", help="print the issues as JSON")
+    parser.add_argument(
+        "--gemini",
+        action="store_true",
+        help="let Gemini rewrite the issue text (needs GEMINI_API_KEY in .env)",
+    )
     args = parser.parse_args(argv)
 
     profiles = _read_jsonl(PROFILES_PATH)
@@ -966,13 +1241,20 @@ def main(argv: list[str] | None = None) -> int:
     profile.is_confirmed = True
     job = jobs[args.job_id]
     markdown = generate_cv_markdown(profile, job, job["description"])
-    issues = analyse_cv(profile, _sections_from_markdown(markdown), job)
+    diagnostics: dict = {}
+    issues = analyse_cv(
+        profile,
+        _sections_from_markdown(markdown),
+        job,
+        use_gemini=args.gemini,
+        diagnostics=diagnostics,
+    )
 
     if args.json:
         dumped = [issue.model_dump() for issue in issues]
         print(json.dumps(dumped, indent=2, ensure_ascii=False))
     else:
-        print(_format_report(profile, job, issues))
+        print(_format_report(profile, job, issues, diagnostics, show_sources=args.gemini))
     return 0
 
 

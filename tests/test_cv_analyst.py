@@ -13,6 +13,8 @@ import app.llm_client as llm_client
 import streamlit_app as ui
 from app.agent_engine import detect_thin_content
 from app.cv_analyst import (
+    _BANNED_WORDING_RE,
+    _FEEDBACK_RESPONSE_SCHEMA,
     JOB_AD_SECTION,
     MAX_REQUIREMENT_ISSUES,
     SEVERITY_ORDER,
@@ -411,6 +413,8 @@ def test_templates_never_claim_the_student_lacks_anything() -> None:
         for issue in analyse_cv(profile, _cv_sections(profile), JOBS[DEFAULT_JOB]):
             text = " ".join((issue.why, issue.suggestion, issue.question))
             assert not BANNED_WORDING.search(text), text
+            # Templates are the fallback, so they must pass the Gemini check too.
+            assert not _BANNED_WORDING_RE.search(text), text
             if issue.type == "no_evidence":
                 assert "not shown in your CV" in issue.why
 
@@ -865,3 +869,270 @@ def test_standalone_run_rejects_unknown_ids(argv: list[str]) -> None:
     with pytest.raises(SystemExit) as exit_info:
         main(argv)
     assert exit_info.value.code == 2
+
+
+# Gemini feedback, with stubs only
+
+
+def _echo_feedback(payload: dict) -> dict:
+    """A well-behaved response: every issue, its quote copied, plain text."""
+    return {
+        "issues": [
+            {
+                "issue_id": item["issue_id"],
+                "quote": item["quote"],
+                "why": "llm-written: a reader cannot see what this part shows.",
+                "suggestion": "llm-written: add one detail, such as [number of users].",
+                "question": "llm-written: what changed because of this work?",
+            }
+            for item in payload["issues"]
+        ]
+    }
+
+
+class _GeminiStub:
+    """Stands in for app.llm_client: records each call, answers from the payload."""
+
+    def __init__(self, monkeypatch, respond=_echo_feedback, error=None) -> None:
+        self.calls: list[dict] = []
+        self.respond = respond
+        self.error = error
+        monkeypatch.setattr(llm_client, "get_gemini_client", lambda: "stub-client")
+        monkeypatch.setattr(llm_client, "call_gemini_json", self)
+
+    def __call__(self, client, **kwargs) -> dict:
+        self.calls.append(kwargs)
+        if self.error is not None:
+            raise self.error
+        return self.respond(json.loads(kwargs["user_content"]))
+
+
+def _maya_run(job: dict | None = None, sections: dict[str, str] | None = None):
+    """Maya's issues with Gemini on, their template twins, and the diagnostics."""
+    maya = _demo_profile("student_profile_01")
+    sections = sections or _cv_sections(maya)
+    job = job or JOBS[DEFAULT_JOB]
+    template = analyse_cv(maya, sections, job, use_gemini=False)
+    diagnostics: dict = {}
+    issues = analyse_cv(maya, sections, job, diagnostics=diagnostics)
+    return issues, template, diagnostics
+
+
+def _first_issue_changed(field_name: str, value: str):
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        response["issues"][0][field_name] = value
+        return response
+
+    return respond
+
+
+def test_valid_gemini_text_is_used(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _GeminiStub(monkeypatch)
+    issues, template, diagnostics = _maya_run()
+    assert len(stub.calls) == 1
+    assert issues and all(issue.why.startswith("llm-written") for issue in issues)
+    assert diagnostics["path"] == "gemini"
+    assert all(
+        entry == {"source": "gemini", "reason": "", "detail": ""}
+        for entry in diagnostics["issues"].values()
+    )
+    call = stub.calls[0]
+    assert call["response_schema"] == _FEEDBACK_RESPONSE_SCHEMA
+    assert "model" not in call  # the model name stays in llm_client
+
+
+def test_gemini_cannot_change_type_severity_or_quote(monkeypatch: pytest.MonkeyPatch) -> None:
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        for item in response["issues"]:
+            item.update(type="vague", severity="low", section="Skills")
+        return response
+
+    _GeminiStub(monkeypatch, respond)
+    issues, template, _ = _maya_run()
+    fixed = ("issue_id", "type", "severity", "section", "quote")
+    assert [[getattr(i, f) for f in fixed] for i in issues] == [
+        [getattr(t, f) for f in fixed] for t in template
+    ]
+
+
+def test_payload_redacts_the_name_and_skips_private_sections(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    stub = _GeminiStub(monkeypatch)
+    maya = _demo_profile("student_profile_01")
+    sections = _cv_sections(maya)
+    sections["Summary"] = sections["Summary"].replace(
+        "# Maya Chen", "# Maya Chen, Senior Engineer at Google"
+    )
+    sections["Professional Summary"] += " Worked as a Software Engineering Intern."
+    issues, template, diagnostics = _maya_run(sections=sections)
+
+    sent = stub.calls[0]["user_content"]
+    for private in ("Maya", "Chen", "Google", "github.com", "linkedin"):
+        assert private not in sent
+    assert "[name]" in sent
+    [header] = [i for i in issues if i.section == "Summary"]
+    assert diagnostics["issues"][header.issue_id]["reason"] == "private_section"
+    assert header.why == next(t.why for t in template if t.issue_id == header.issue_id)
+
+
+def test_ungrounded_gemini_field_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    _GeminiStub(
+        monkeypatch,
+        _first_issue_changed("suggestion", "Mention the Kubernetes cluster you ran."),
+    )
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    entry = diagnostics["issues"][issues[0].issue_id]
+    assert entry["source"] == "template" and entry["reason"] == "ungrounded"
+    assert "Kubernetes" in entry["detail"]
+    assert all(issue.why.startswith("llm-written") for issue in issues[1:])
+    assert diagnostics["path"] == "partial"
+
+
+def test_job_ad_terms_from_the_quote_are_allowed(monkeypatch: pytest.MonkeyPatch) -> None:
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        for item in response["issues"]:
+            if item["quote"] == "TensorFlow":
+                item["why"] = "The ad asks for TensorFlow, which your CV does not show."
+        return response
+
+    _GeminiStub(monkeypatch, respond)
+    issues, _, diagnostics = _maya_run(job=_job("Requirements: TensorFlow."))
+    [issue] = [i for i in issues if i.section == JOB_AD_SECTION]
+    assert issue.why == "The ad asks for TensorFlow, which your CV does not show."
+    assert diagnostics["issues"][issue.issue_id]["source"] == "gemini"
+
+
+@pytest.mark.parametrize(
+    "phrase",
+    [
+        "you lack Python",
+        "you don't have the skills",
+        "you are not qualified",
+        "they will not hire you",
+        "an employer will skip it",
+    ],
+)
+def test_banned_wording_falls_back(monkeypatch: pytest.MonkeyPatch, phrase: str) -> None:
+    _GeminiStub(monkeypatch, _first_issue_changed("why", f"llm-written: {phrase}."))
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    assert diagnostics["issues"][issues[0].issue_id]["reason"] == "banned"
+
+
+def test_text_written_for_another_quote_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        response["issues"][0]["quote"] = response["issues"][1]["quote"]
+        return response
+
+    _GeminiStub(monkeypatch, respond)
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    assert diagnostics["issues"][issues[0].issue_id]["reason"] == "quote_mismatch"
+    assert issues[1].why.startswith("llm-written")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "value", "reason"),
+    [("why", "   ", "empty_field"), ("question", "x" * 301, "too_long")],
+)
+def test_empty_or_long_field_falls_back(
+    monkeypatch: pytest.MonkeyPatch, field_name: str, value: str, reason: str
+) -> None:
+    _GeminiStub(monkeypatch, _first_issue_changed(field_name, value))
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    assert diagnostics["issues"][issues[0].issue_id]["reason"] == reason
+
+
+def test_missing_issue_falls_back_and_unknown_ids_are_ignored(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def respond(payload: dict) -> dict:
+        response = _echo_feedback(payload)
+        dropped = response["issues"].pop(0)
+        response["issues"].append({**dropped, "issue_id": "vague-ffffffff"})
+        return response
+
+    _GeminiStub(monkeypatch, respond)
+    issues, template, diagnostics = _maya_run()
+    assert issues[0].model_dump() == template[0].model_dump()
+    assert diagnostics["issues"][issues[0].issue_id]["reason"] == "missing"
+    assert "vague-ffffffff" not in diagnostics["issues"]
+    assert [i.issue_id for i in issues] == [t.issue_id for t in template]
+
+
+@pytest.mark.parametrize(
+    ("error", "reason"),
+    [
+        (llm_client.GeminiAPIError("quota exceeded"), "api"),
+        (llm_client.GeminiJSONParseError("not JSON"), "parse"),
+    ],
+)
+def test_gemini_errors_fall_back_to_templates(
+    monkeypatch: pytest.MonkeyPatch, error: Exception, reason: str
+) -> None:
+    _GeminiStub(monkeypatch, error=error)
+    issues, template, diagnostics = _maya_run()
+    assert [i.model_dump() for i in issues] == [t.model_dump() for t in template]
+    assert (diagnostics["path"], diagnostics["reason"]) == ("template", reason)
+    assert str(error) in diagnostics["detail"]
+    assert {entry["reason"] for entry in diagnostics["issues"].values()} == {reason}
+
+
+def test_response_without_an_issues_list_falls_back(monkeypatch: pytest.MonkeyPatch) -> None:
+    _GeminiStub(monkeypatch, lambda payload: {"feedback": []})
+    issues, template, diagnostics = _maya_run()
+    assert [i.model_dump() for i in issues] == [t.model_dump() for t in template]
+    assert diagnostics["reason"] == "empty"
+
+
+def test_no_client_means_templates_and_no_call() -> None:
+    issues, template, diagnostics = _maya_run()
+    assert [i.model_dump() for i in issues] == [t.model_dump() for t in template]
+    assert (diagnostics["path"], diagnostics["reason"]) == ("template", "no_client")
+
+
+def test_use_gemini_false_makes_no_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _GeminiStub(monkeypatch)
+    maya = _demo_profile("student_profile_01")
+    diagnostics: dict = {}
+    analyse_cv(maya, _cv_sections(maya), None, use_gemini=False, diagnostics=diagnostics)
+    assert stub.calls == []
+    assert diagnostics["reason"] == "disabled"
+
+
+def test_no_issues_makes_no_call(monkeypatch: pytest.MonkeyPatch) -> None:
+    stub = _GeminiStub(monkeypatch)
+    diagnostics: dict = {}
+    maya = _demo_profile("student_profile_01")
+    assert analyse_cv(maya, {}, None, diagnostics=diagnostics) == []
+    assert stub.calls == []
+    assert diagnostics["reason"] == "no_issues"
+
+
+def test_standalone_run_stays_deterministic_without_the_flag(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stub = _GeminiStub(monkeypatch)
+    assert main(["student_profile_01", DEFAULT_JOB]) == 0
+    assert stub.calls == []
+    out = capsys.readouterr().out
+    assert re.search(r"Text: template for all \d+ issues \(Gemini not requested", out)
+
+
+def test_standalone_run_gemini_flag_opts_in(
+    monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    stub = _GeminiStub(monkeypatch)
+    assert main(["student_profile_01", DEFAULT_JOB, "--gemini"]) == 0
+    assert len(stub.calls) == 1
+    out = capsys.readouterr().out
+    assert re.search(r"Text: Gemini for (\d+) of \1 issues", out)
+    assert "llm-written" in out
+    assert "   text:       gemini" in out

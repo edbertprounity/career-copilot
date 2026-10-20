@@ -1,0 +1,112 @@
+[
+  {
+    "issue_id": "vague-b1456a30",
+    "section": "Experience",
+    "quote": "Handled customer questions, worked with a small team during busy periods and followed written procedures.",
+    "type": "vague",
+    "severity": "medium",
+    "why": "This says what you did, but not which tool you used, how big the work was, or what came of it.",
+    "suggestion": "Add one detail you can back up: a tool, a number (people, requests, records), or a result.",
+    "question": "In the Customer Service Assistant role, what did you use, how much did you handle, and what changed because of your work?"
+  },
+  {
+    "issue_id": "low_relevance-6b39c39b",
+    "section": "Job ad",
+    "quote": "machine-learning fundamentals",
+    "type": "low_relevance",
+    "severity": "medium",
+    "why": "The job ad asks for \"machine-learning fundamentals\", and your CV doesn't mention it.",
+    "suggestion": "If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.",
+    "question": "Have you done anything involving \"machine-learning fundamentals\", even in coursework?"
+  },
+  {
+    "issue_id": "low_relevance-47b897b1",
+    "section": "Job ad",
+    "quote": "statistics",
+    "type": "low_relevance",
+    "severity": "medium",
+    "why": "The job ad asks for \"statistics\", and your CV doesn't mention it.",
+    "suggestion": "If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.",
+    "question": "Have you done anything involving \"statistics\", even in coursework?"
+  },
+  {
+    "issue_id": "low_relevance-327de18c",
+    "section": "Job ad",
+    "quote": "data analysis",
+    "type": "low_relevance",
+    "severity": "medium",
+    "why": "The job ad asks for \"data analysis\", and your CV doesn't mention it.",
+    "suggestion": "If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.",
+    "question": "Have you done anything involving \"data analysis\", even in coursework?"
+  },
+  {
+    "issue_id": "low_relevance-b77143e8",
+    "section": "Job ad",
+    "quote": "LLMs",
+    "type": "low_relevance",
+    "severity": "medium",
+    "why": "The job ad asks for \"LLMs\", and your CV doesn't mention it.",
+    "suggestion": "If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.",
+    "question": "Have you done anything involving \"LLMs\", even in coursework?"
+  },
+  {
+    "issue_id": "low_relevance-012a550a",
+    "section": "Job ad",
+    "quote": "RAG",
+    "type": "low_relevance",
+    "severity": "medium",
+    "why": "The job ad asks for \"RAG\", and your CV doesn't mention it.",
+    "suggestion": "If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.",
+    "question": "Have you done anything involving \"RAG\", even in coursework?"
+  },
+  {
+    "issue_id": "no_evidence-c1b37a1a",
+    "section": "Projects",
+    "quote": "Flask",
+    "type": "no_evidence",
+    "severity": "low",
+    "why": "Flask is listed for the Team Course Planner project, but no description shows how you used it, so it is not shown in your CV.",
+    "suggestion": "If you used Flask in the Team Course Planner project, add one line on what you did with it, or attach evidence such as a screenshot.",
+    "question": "What did you do with Flask in the Team Course Planner project?"
+  },
+  {
+    "issue_id": "no_evidence-02c60810",
+    "section": "Projects",
+    "quote": "SQLite",
+    "type": "no_evidence",
+    "severity": "low",
+    "why": "SQLite is listed for the Team Course Planner project, but no description shows how you used it, so it is not shown in your CV.",
+    "suggestion": "If you used SQLite in the Team Course Planner project, add one line on what you did with it, or attach evidence such as a screenshot.",
+    "question": "What did you do with SQLite in the Team Course Planner project?"
+  },
+  {
+    "issue_id": "no_evidence-b29c00e5",
+    "section": "Projects",
+    "quote": "prompt design",
+    "type": "no_evidence",
+    "severity": "low",
+    "why": "prompt design is listed for the AI Coursework Prototype project, but no description shows how you used it, so it is not shown in your CV.",
+    "suggestion": "If you used prompt design in the AI Coursework Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.",
+    "question": "What did you do with prompt design in the AI Coursework Prototype project?"
+  },
+  {
+    "issue_id": "no_evidence-8acd2e04",
+    "section": "Projects",
+    "quote": "JSON",
+    "type": "no_evidence",
+    "severity": "low",
+    "why": "JSON is listed for the AI Coursework Prototype project, but no description shows how you used it, so it is not shown in your CV.",
+    "suggestion": "If you used JSON in the AI Coursework Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.",
+    "question": "What did you do with JSON in the AI Coursework Prototype project?"
+  },
+  {
+    "issue_id": "low_relevance-06ac6df3",
+    "section": "Experience",
+    "quote": "Handled customer questions, worked with a small team during busy periods and followed written procedures.",
+    "type": "low_relevance",
+    "severity": "low",
+    "why": "The Customer Service Assistant role doesn't mention any of the skills this job asks for that your CV lists (Python).",
+    "suggestion": "If this work used Python, name it and say what you did with it. If it didn't, you don't need to change this entry.",
+    "question": "Did the Customer Service Assistant role involve Python?"
+  }
+]

@@ -216,6 +216,57 @@ def test_adding_evidence_marks_the_analysis_out_of_date(
     assert "Flask" not in quotes and "SQLite" in quotes
 
 
+def _liam() -> StudentProfile:
+    profile = StudentProfile.model_validate(PROFILE_ROWS["student_profile_02"])
+    profile.is_confirmed = True
+    return profile
+
+
+def _maya_needles(maya: StudentProfile, maya_quotes: list[str]) -> list[str]:
+    """Maya's issue quotes plus what identifies her: name, projects, roles."""
+    return [
+        *maya_quotes,
+        maya.name,
+        *(project.title for project in maya.projects),
+        *(item.role for item in maya.experience),
+    ]
+
+
+def test_a_different_student_never_sees_the_last_analysis(
+    analyse_calls: list[tuple],
+) -> None:
+    maya = _maya()
+    liam = _liam()
+    at = _press_analyse(_panel(maya, _sections(maya), _selected_job()))
+    maya_quotes = [issue["quote"] for issue in at.session_state["analysis_issues"]]
+    assert "Flask" in maya_quotes and "Flask" in _shown_text(at)
+
+    # Same browser session, same job, a different student.
+    at.session_state["profile"] = liam
+    at.session_state["cv_sections"] = _sections(liam)
+    at.run()
+
+    shown = _shown_text(at)
+    for needle in _maya_needles(maya, maya_quotes):
+        assert needle not in shown, needle
+    assert NOT_ANALYSED_CAPTION in _captions(at)
+    assert STALE_CAPTION not in _captions(at)
+    assert len(at.expander) == 0
+    assert at.session_state["analysis_issues"] == []
+    assert at.session_state["analysis_snapshot"] == {}
+    assert at.session_state["analysis_diagnostics"] == {}
+    assert len(analyse_calls) == 1
+
+    # Liam's own analysis shows his issues and nothing exclusive to Maya.
+    _press_analyse(at)
+    liam_quotes = {issue["quote"] for issue in at.session_state["analysis_issues"]}
+    assert liam_quotes
+    exclusive = [q for q in _maya_needles(maya, maya_quotes) if q not in liam_quotes]
+    shown = _shown_text(at)
+    for needle in exclusive:
+        assert needle not in shown, needle
+
+
 def test_changing_the_job_marks_the_analysis_out_of_date() -> None:
     maya = _maya()
     at = _press_analyse(_panel(maya, _sections(maya), _selected_job()))

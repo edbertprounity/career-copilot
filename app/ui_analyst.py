@@ -2,8 +2,9 @@
 
 The panel owns its session state. analyse_cv runs only when the student
 presses Analyse, never on an ordinary rerun, because each analysis is one
-Gemini call. A stored analysis stays on screen after the CV or evidence
-changes, with a note, because the student may be working through it.
+Gemini call. A stored analysis stays on screen after the CV, evidence or job
+changes, with a note, because the student may be working through it. When
+a different student is using the app, the stored analysis is cleared.
 """
 
 from __future__ import annotations
@@ -81,6 +82,13 @@ def render_analysis_panel() -> None:
         return
 
     current = _snapshot(selected_job, cv_sections, profile)
+    stored = st.session_state[SNAPSHOT_KEY]
+    if stored and stored.get("student") != current["student"]:
+        # A different student is using the app: the last one's issues must
+        # not appear, even marked out of date.
+        st.session_state[ISSUES_KEY] = []
+        st.session_state[SNAPSHOT_KEY] = {}
+        st.session_state[DIAGNOSTICS_KEY] = {}
     if st.button("Analyse", key=ANALYSE_BUTTON_KEY):
         job = _job_with_description(selected_job)
         diagnostics: dict = {}
@@ -198,8 +206,13 @@ def _render_issue(issue: dict, show_quote_heading: bool) -> None:
 
 
 def _snapshot(selected_job: dict, cv_sections: dict[str, str], profile) -> dict:
-    """What an analysis depends on: the job, the CV text and the evidence."""
+    """What an analysis depends on: the student, the job, the CV and the evidence.
+
+    The student is the profile without its evidence, so adding evidence
+    marks the analysis out of date instead of looking like a new student.
+    """
     return {
+        "student": profile.model_dump(exclude={"skill_evidence"}),
         "job_id": str(selected_job.get("document_id") or ""),
         "cv_sections": dict(cv_sections),
         "skill_evidence": copy.deepcopy(list(profile.skill_evidence)),

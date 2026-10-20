@@ -1,0 +1,75 @@
+Ethan Nguyen (student_profile_05) vs Graduate AI Engineer (graduate_ai_engineer)
+12 issues: 0 high, 5 medium, 7 low
+Text: template for all 12 issues (Gemini not requested; add --gemini)
+
+1. [medium] low_relevance | Job ad
+   quote:      machine-learning fundamentals
+   why:        The job ad asks for "machine-learning fundamentals", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "machine-learning fundamentals", even in coursework?
+
+2. [medium] low_relevance | Job ad
+   quote:      statistics
+   why:        The job ad asks for "statistics", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "statistics", even in coursework?
+
+3. [medium] low_relevance | Job ad
+   quote:      data analysis
+   why:        The job ad asks for "data analysis", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "data analysis", even in coursework?
+
+4. [medium] low_relevance | Job ad
+   quote:      LLMs
+   why:        The job ad asks for "LLMs", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "LLMs", even in coursework?
+
+5. [medium] low_relevance | Job ad
+   quote:      RAG
+   why:        The job ad asks for "RAG", and your CV doesn't mention it.
+   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   question:   Have you done anything involving "RAG", even in coursework?
+
+6. [low] no_evidence | Projects
+   quote:      structured tool calls
+   why:        structured tool calls is listed for the Tool-Call Agent Prototype project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used structured tool calls in the Tool-Call Agent Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with structured tool calls in the Tool-Call Agent Prototype project?
+
+7. [low] no_evidence | Projects
+   quote:      prompt design
+   why:        prompt design is listed for the Tool-Call Agent Prototype project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used prompt design in the Tool-Call Agent Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with prompt design in the Tool-Call Agent Prototype project?
+
+8. [low] no_evidence | Projects
+   quote:      JSON
+   why:        JSON is listed for the Tool-Call Agent Prototype project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used JSON in the Tool-Call Agent Prototype project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with JSON in the Tool-Call Agent Prototype project?
+
+9. [low] no_evidence | Projects
+   quote:      PostgreSQL
+   why:        PostgreSQL is listed for the Team Service Platform project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used PostgreSQL in the Team Service Platform project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with PostgreSQL in the Team Service Platform project?
+
+10. [low] no_evidence | Projects
+   quote:      JUnit
+   why:        JUnit is listed for the Team Service Platform project, but no description shows how you used it, so it is not shown in your CV.
+   suggestion: If you used JUnit in the Team Service Platform project, add one line on what you did with it, or attach evidence such as a screenshot.
+   question:   What did you do with JUnit in the Team Service Platform project?
+
+11. [low] low_relevance | Projects
+   quote:      Worked in a small team on a service platform. Implemented Java backend endpoints, wrote unit tests and helped prepare a short demonstration for non-technical stakeholders.
+   why:        The Team Service Platform project doesn't mention any of the skills this job asks for that your CV lists (Python).
+   suggestion: If this work used Python, name it and say what you did with it. If it didn't, you don't need to change this entry.
+   question:   Did the Team Service Platform project involve Python?
+
+12. [low] low_relevance | Experience
+   quote:      Fixed small backend issues, added automated tests, updated API documentation, used a basic CI test pipeline and joined sprint planning with a software team. The role represents early workplace experience, not senior engineering responsibility.
+   why:        The Software Development Cadet role doesn't mention any of the skills this job asks for that your CV lists (Python).
+   suggestion: If this work used Python, name it and say what you did with it. If it didn't, you don't need to change this entry.
+   question:   Did the Software Development Cadet role involve Python?

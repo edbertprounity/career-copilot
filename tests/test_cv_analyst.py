@@ -685,6 +685,19 @@ def test_unrelated_entry_is_low_relevance() -> None:
         ("Experience", RETAIL, "low")
     ]
     assert "your CV lists (Python)" in issues[0].why
+    assert issues[0].suggestion == (
+        "If this work used Python, name it and say what you did with it. "
+        "If it didn't, you don't need to change this entry."
+    )
+    assert issues[0].question == "Did the Customer Service Assistant role involve Python?"
+
+
+@pytest.mark.parametrize("job_id", sorted(JOBS))
+def test_relevant_but_unnamed_work_is_not_told_to_shrink(job_id: str) -> None:
+    ethan = _demo_profile("student_profile_05")
+    for issue in _entry_relevance_issues(ethan, _cv_sections(ethan, job_id), JOBS[job_id]):
+        assert "short" not in issue.suggestion and "lower" not in issue.suggestion
+        assert "you don't need to change this entry" in issue.suggestion
 
 
 def test_no_entry_is_flagged_when_the_job_names_no_cv_skill() -> None:
@@ -733,7 +746,8 @@ def test_docker_requirement_is_flagged_for_a_cv_without_docker(
     [issue] = _job_ad_issues(maya, sections, job)
     assert (issue.type, issue.quote, issue.severity) == ("low_relevance", quote, "medium")
     assert issue.quote in job["description"]
-    assert "doesn't mention it" in issue.why
+    assert issue.why == f'The job ad asks for "{quote}", and your CV doesn\'t mention it.'
+    assert f'"{quote}"' in issue.question
 
 
 def test_docker_requirement_is_addressed_by_a_cv_with_docker() -> None:
@@ -748,7 +762,24 @@ def test_preferred_requirement_is_low() -> None:
         maya, _cv_sections(maya), _job("Requirements: Python. Nice to have: Kubernetes.")
     )
     assert [(i.quote, i.severity) for i in issues] == [("Kubernetes", "low")]
-    assert "lists Kubernetes as preferred" in issues[0].why
+    assert 'lists "Kubernetes" as preferred' in issues[0].why
+
+
+def test_filler_requirement_items_are_dropped() -> None:
+    maya = _demo_profile("student_profile_01")
+    job = _job(
+        "Requirements: Kafka, or similar frameworks; other cloud platforms; "
+        "related tools; equivalent experience; comparable systems."
+    )
+    assert [i.quote for i in _job_ad_issues(maya, _cv_sections(maya), job)] == ["Kafka"]
+
+
+def test_computer_vision_job_has_no_similar_frameworks_issue() -> None:
+    maya = _demo_profile("student_profile_01")
+    job = JOBS["computer_vision_engineer"]
+    quotes = [i.quote for i in _job_ad_issues(maya, _cv_sections(maya), job)]
+    assert quotes
+    assert not any(quote.lower().startswith("similar") for quote in quotes)
 
 
 def test_desirable_block_without_colon_is_preferred() -> None:

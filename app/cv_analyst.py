@@ -138,6 +138,11 @@ _GENERIC_REQUIREMENT_WORDS = frozenset(
     }
 )
 _WORD_RE = re.compile(r"[A-Za-z0-9+#]+")
+# Items that only point at something else ("or similar frameworks") name no
+# requirement of their own.
+_FILLER_ITEM_RE = re.compile(
+    r"^(?:similar|other|related|equivalent|comparable)\b", re.IGNORECASE
+)
 
 
 class AnalysisIssue(BaseModel):
@@ -589,8 +594,9 @@ def _unrelated_entry_issues(
                         f"({', '.join(shown)})."
                     ),
                     suggestion=(
-                        f"If this work used {_or_list(shown)}, say how. Otherwise "
-                        "keep it short or move it lower."
+                        f"If this work used {_or_list(shown)}, name it and say what "
+                        "you did with it. If it didn't, you don't need to change "
+                        "this entry."
                     ),
                     question=f"Did {entry} involve {_or_list(shown)}?",
                 )
@@ -621,14 +627,16 @@ def _unaddressed_requirement_issues(
                 item,
                 "low" if preferred else "medium",
                 why=(
-                    f"The job ad lists {item}{' as preferred' if preferred else ''}, "
-                    "and your CV doesn't mention it."
+                    f'The job ad lists "{item}" as preferred, and your CV doesn\'t '
+                    "mention it."
+                    if preferred
+                    else f'The job ad asks for "{item}", and your CV doesn\'t mention it.'
                 ),
                 suggestion=(
                     "If you have done this in a project, course or job, add it "
                     "there. If not, leave it out rather than adding it to match."
                 ),
-                question=f"Have you done anything involving {item}, even in coursework?",
+                question=f'Have you done anything involving "{item}", even in coursework?',
             )
         )
         if len(issues) == MAX_REQUIREMENT_ISSUES:
@@ -659,6 +667,8 @@ def _job_requirements(job: dict) -> list[tuple[str, bool]]:
                 continue
             for part in clause.split(","):
                 item = _strip_lead_ins(part.strip().rstrip("."))
+                if _FILLER_ITEM_RE.match(item):
+                    continue
                 key = _normalize(item)
                 if key and key not in seen:
                     seen.add(key)

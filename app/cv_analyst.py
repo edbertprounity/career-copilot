@@ -302,6 +302,21 @@ def add_skill_evidence(profile: StudentProfile, skill: str, source: str) -> dict
     return update_profile_field(profile, {"skill_evidence": [*entries, new_entry]})
 
 
+def issue_entry(section: str, quote: str, cv_sections: dict[str, str]) -> str:
+    """Title of the Projects or Experience entry a quote belongs to, or "".
+
+    A no_evidence quote is an item of the entry's Technologies line; other
+    quotes are one of its description lines or its title.
+    """
+    if section not in ITEM_SECTIONS:
+        return ""
+    body = LAYOUT_COMMENT_RE.sub("", cv_sections.get(section, ""))
+    for item in _parse_items(body):
+        if quote in item.technologies or quote in item.bullets or quote == item.title:
+            return item.title
+    return ""
+
+
 def _vague_issues(
     cv_sections: dict[str, str], profile: StudentProfile
 ) -> list[AnalysisIssue]:

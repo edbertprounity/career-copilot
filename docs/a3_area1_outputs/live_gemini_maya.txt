@@ -1,0 +1,80 @@
+Maya Chen (student_profile_01) vs Graduate AI Engineer (graduate_ai_engineer)
+11 issues: 0 high, 6 medium, 5 low
+Text: Gemini for 11 of 11 issues
+
+1. [medium] vague | Experience
+   quote:      Handled customer questions, worked with a small team during busy periods and followed written procedures.
+   why:        This description lists general tasks without showing the volume of work, tools used, or concrete outcomes.
+   suggestion: Specify details for this role by adding [number of customer questions], [tool used], or [result achieved].
+   question:   In your Customer Service Assistant role, how many questions did you handle, or what tools or results were involved?
+   text:       gemini
+
+2. [medium] low_relevance | Job ad
+   quote:      machine-learning fundamentals
+   why:        The job ad requests machine-learning fundamentals, but this is not shown in your CV.
+   suggestion: If you have experience with machine-learning fundamentals, add it to a relevant project or course section; otherwise, leave it out.
+   question:   Have you covered machine-learning fundamentals in any coursework, projects, or work experience?
+   text:       gemini
+
+3. [medium] low_relevance | Job ad
+   quote:      statistics
+   why:        The job ad requests statistics, but this skill is not shown in your CV.
+   suggestion: If you have used statistics in a project or course, mention it there; otherwise, do not add it.
+   question:   Have you used statistics in any coursework, projects, or work experience?
+   text:       gemini
+
+4. [medium] low_relevance | Job ad
+   quote:      data analysis
+   why:        The job ad asks for data analysis, but this area is not shown in your CV.
+   suggestion: If you have performed data analysis in your studies or projects, add it to your CV; otherwise, leave it out.
+   question:   Have you completed any data analysis in your coursework or projects?
+   text:       gemini
+
+5. [medium] low_relevance | Job ad
+   quote:      LLMs
+   why:        The job ad highlights LLMs, but this knowledge is not shown in your CV.
+   suggestion: If you have experience with LLMs from coursework or projects, include it in your CV; otherwise, omit it.
+   question:   Have you worked with LLMs in any course or personal project?
+   text:       gemini
+
+6. [medium] low_relevance | Job ad
+   quote:      RAG
+   why:        The job ad asks for RAG, but this requirement is not shown in your CV.
+   suggestion: If you have experience with RAG, detail it in a project or coursework entry; otherwise, do not include it.
+   question:   Have you used RAG in any project or coursework?
+   text:       gemini
+
+7. [low] no_evidence | Projects
+   quote:      Flask
+   why:        Flask is listed under technologies for Team Course Planner, but how you used it is not shown in the project description.
+   suggestion: In the Team Course Planner section, add details on how you used Flask to build the web API.
+   question:   What specifically did you build or implement using Flask in the Team Course Planner project?
+   text:       gemini
+
+8. [low] no_evidence | Projects
+   quote:      SQLite
+   why:        SQLite is listed as a technology for Team Course Planner, but its application is not shown in the text.
+   suggestion: Add a detail to the Team Course Planner bullet points explaining how SQLite was used.
+   question:   How did you use SQLite in the Team Course Planner project?
+   text:       gemini
+
+9. [low] no_evidence | Projects
+   quote:      prompt design
+   why:        Prompt design is listed for the AI Coursework Prototype, but how it was applied is not shown in the bullet points.
+   suggestion: In the AI Coursework Prototype description, explain how prompt design was implemented for the agent prototype.
+   question:   How did you use prompt design in the AI Coursework Prototype project?
+   text:       gemini
+
+10. [low] no_evidence | Projects
+   quote:      JSON
+   why:        JSON is listed under technologies for the AI Coursework Prototype, but its usage is not shown in the description.
+   suggestion: Clarify in the AI Coursework Prototype section how JSON was used in building the tool-call agent prototype.
+   question:   How was JSON utilized in the AI Coursework Prototype project?
+   text:       gemini
+
+11. [low] low_relevance | Experience
+   quote:      Handled customer questions, worked with a small team during busy periods and followed written procedures.
+   why:        This retail entry does not show technical skills such as Python that are listed elsewhere in your CV.
+   suggestion: If this role involved Python, mention how you used it; if not, no changes are needed for this entry.
+   question:   Did your Customer Service Assistant role involve using Python?
+   text:       gemini

@@ -407,6 +407,39 @@ def generate_cv_summary(
     return summary
 
 
+def ungrounded_terms(
+    text: str, profile: StudentProfile, job_title: str = ""
+) -> list[str]:
+    """Claim terms in any CV text that the profile does not support.
+
+    The same check that guards the Gemini summary, so the CV analyst and
+    summary generation agree on what counts as invented.
+    """
+    return _ungrounded_summary_terms(text, profile, job_title=job_title)
+
+
+def profile_supports(phrase: str, profile: StudentProfile) -> bool:
+    """True when phrase appears whole in the profile facts or skill_evidence.
+
+    Built for list items (a Skills entry, a technology), which the summary
+    claim extractor skips when they are sentence-initial, lowercase or under
+    four letters. skill_evidence skills count, so evidence added after
+    confirmation backs a claim. _profile_fact_blob is untouched, so summary
+    grounding is unchanged. An empty phrase claims nothing, so it is supported.
+    """
+    key = _normalize_for_grounding(phrase)
+    if not key:
+        return True
+    evidence = " ".join(
+        str(item.get("skill") or "")
+        for item in profile.skill_evidence
+        if isinstance(item, dict)
+    )
+    facts = _normalize_for_grounding(f"{_profile_fact_blob(profile)} {evidence}")
+    pattern = rf"(?<![a-z0-9]){re.escape(key)}(?![a-z0-9])"
+    return re.search(pattern, facts) is not None
+
+
 def generate_cv_pdf(markdown_content: str, output_path: str) -> None:
     """Write markdown CV content to an A4 PDF with explicit margins and page breaks."""
     pdf = _build_cv_pdf(markdown_content)

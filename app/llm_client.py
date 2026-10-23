@@ -11,6 +11,8 @@ from google.genai import types
 
 _client: genai.Client | None = None
 
+GEMINI_MODEL = "gemini-3.6-flash"
+
 
 class GeminiAPIError(Exception):
     """Raised when a Gemini API call fails or returns an empty response."""
@@ -39,37 +41,20 @@ def get_gemini_client() -> genai.Client | None:
     return _client
 
 
-def call_gemini_json(
-    client: genai.Client,
+def _json_generate_config(
     system_instruction: str,
-    user_content: str,
-    model: str = "gemini-3.6-flash",
-    response_schema: dict | None = None,
-) -> dict:
-    """Call Gemini and return a parsed JSON object.
-
-    Raises:
-        GeminiAPIError: if the API call fails or the response is empty.
-        GeminiJSONParseError: if the response is not a JSON object.
-    """
+    response_schema: dict | None,
+) -> types.GenerateContentConfig:
     config_kwargs: dict = {
         "system_instruction": system_instruction,
         "response_mime_type": "application/json",
     }
     if response_schema is not None:
         config_kwargs["response_schema"] = response_schema
+    return types.GenerateContentConfig(**config_kwargs)
 
-    try:
-        response = client.models.generate_content(
-            model=model,
-            contents=user_content,
-            config=types.GenerateContentConfig(**config_kwargs),
-        )
-    except GeminiAPIError:
-        raise
-    except Exception as exc:
-        raise GeminiAPIError(f"Gemini generate_content failed: {exc}") from exc
 
+def _parse_json_object_response(response: object) -> dict:
     text = getattr(response, "text", None)
     if not text or not str(text).strip():
         raise GeminiAPIError("Gemini returned an empty response")
@@ -87,6 +72,76 @@ def call_gemini_json(
         )
 
     return parsed
+
+
+def _generate_json_object(
+    client: genai.Client,
+    *,
+    model: str,
+    contents: object,
+    system_instruction: str,
+    response_schema: dict | None,
+) -> dict:
+    try:
+        response = client.models.generate_content(
+            model=model,
+            contents=contents,
+            config=_json_generate_config(system_instruction, response_schema),
+        )
+    except GeminiAPIError:
+        raise
+    except Exception as exc:
+        raise GeminiAPIError(f"Gemini generate_content failed: {exc}") from exc
+
+    return _parse_json_object_response(response)
+
+
+def call_gemini_json(
+    client: genai.Client,
+    system_instruction: str,
+    user_content: str,
+    model: str = GEMINI_MODEL,
+    response_schema: dict | None = None,
+) -> dict:
+    """Call Gemini and return a parsed JSON object.
+
+    Raises:
+        GeminiAPIError: if the API call fails or the response is empty.
+        GeminiJSONParseError: if the response is not a JSON object.
+    """
+    return _generate_json_object(
+        client,
+        model=model,
+        contents=user_content,
+        system_instruction=system_instruction,
+        response_schema=response_schema,
+    )
+
+
+def call_gemini_parts_json(
+    client: genai.Client,
+    system_instruction: str,
+    parts: list,
+    response_schema: dict | None = None,
+    model: str = GEMINI_MODEL,
+) -> dict:
+    """Call Gemini with SDK Part objects and return a parsed JSON object.
+
+    ``parts`` is a list of ``google.genai.types.Part`` (text and/or inline
+    bytes such as ``image/png``). It is passed as ``contents``; this helper
+    does not upload files or create a second client.
+
+    Raises:
+        GeminiAPIError: if the API call fails or the response is empty.
+        GeminiJSONParseError: if the response is not a JSON object.
+    """
+    return _generate_json_object(
+        client,
+        model=model,
+        contents=parts,
+        system_instruction=system_instruction,
+        response_schema=response_schema,
+    )
 
 
 if __name__ == "__main__":

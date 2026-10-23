@@ -6,3 +6,4 @@ google-genai==2.20.0
 python-dotenv==1.2.3
 sentence-transformers==6.0.0
 pytest==9.1.1
+pymupdf==1.28.2

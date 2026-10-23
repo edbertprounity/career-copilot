@@ -248,3 +248,6 @@ def _preview(quote: str) -> str:
 def _escape(text: str) -> str:
     """Show CV and Gemini text literally, not as markdown or LaTeX."""
     return _MARKDOWN_SPECIAL_RE.sub(r"\\\1", text)
+
+
+render_analyst_panel = render_analysis_panel

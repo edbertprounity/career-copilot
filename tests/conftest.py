@@ -13,7 +13,14 @@ _GEMINI_MODULES = (
     "app.agent_engine",
     "app.vector_store",
     "app.cv_generator",
+    "app.cv_analyst",
+    "app.evidence",
+    "app.job_input",
+    "app.ui_analyst",
+    "app.ui_evidence",
+    "app.ui_job_input",
 )
+_BLOCKED_CALLS = ("call_gemini_json", "call_gemini_parts_json")
 
 
 @pytest.fixture(autouse=True)
@@ -29,11 +36,17 @@ def _block_live_gemini(monkeypatch: pytest.MonkeyPatch) -> None:
         )
 
     for name in _GEMINI_MODULES:
-        module = importlib.import_module(name)
+        try:
+            module = importlib.import_module(name)
+        except ModuleNotFoundError as exc:
+            if exc.name == name:
+                continue
+            raise
         if hasattr(module, "get_gemini_client"):
             monkeypatch.setattr(module, "get_gemini_client", no_client)
-        if hasattr(module, "call_gemini_json"):
-            monkeypatch.setattr(module, "call_gemini_json", no_call)
+        for call_name in _BLOCKED_CALLS:
+            if hasattr(module, call_name):
+                monkeypatch.setattr(module, call_name, no_call)
 
 
 @pytest.fixture

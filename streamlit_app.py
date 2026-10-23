@@ -19,7 +19,19 @@ from app.cv_generator import (
     generate_cv_summary,
 )
 from app.schemas import StudentProfile
-from app.vector_store import load_jobs, search_top_jobs
+from app.ui_analyst import render_analyst_panel
+from app.ui_evidence import render_evidence_panel
+from app.ui_job_input import (
+    clear_custom_job,
+    init_job_input_state,
+    render_job_input_panel,
+)
+from app.vector_store import (
+    GAP_ANALYSIS_FALLBACK,
+    generate_gap_analysis,
+    load_jobs,
+    search_top_jobs,
+)
 
 SECTION_ORDER = (
     "Summary",
@@ -70,6 +82,15 @@ SKIP_NOTE = (
     "Profile already complete — skipping straight to job matches."
 )
 BLANK_ACTION = "blank"
+CUSTOM_JOB_PREFIX = "custom-"
+# New session-state keys (Area 3 contract) and their empty values.
+NEW_STATE_DEFAULTS = {
+    "analysis_issues": list,
+    "evidence_records": list,
+    "custom_jobs": list,
+    "analysis_snapshot": dict,
+    "analysis_diagnostics": dict,
+}
 
 
 def _widget_key(section_name: str) -> str:
@@ -109,6 +130,10 @@ def _init_state() -> None:
         st.session_state.pending_demo_action = None
     if "skip_to_jobs_note" not in st.session_state:
         st.session_state.skip_to_jobs_note = False
+    for key, factory in NEW_STATE_DEFAULTS.items():
+        if key not in st.session_state:
+            st.session_state[key] = factory()
+    init_job_input_state()
 
 
 def _clear_cv_widget_keys() -> None:
@@ -135,6 +160,9 @@ def _reset_session() -> None:
     st.session_state.pending_reset_section = None
     st.session_state.pending_demo_action = None
     st.session_state.skip_to_jobs_note = False
+    for key, factory in NEW_STATE_DEFAULTS.items():
+        st.session_state[key] = factory()
+    clear_custom_job()
 
 
 def _apply_pending_section_reset() -> None:
@@ -368,7 +396,30 @@ def _reassemble_cv(sections: dict[str, str]) -> str:
     return "\n\n".join(parts) + "\n"
 
 
+def _find_custom_job(document_id: str) -> dict | None:
+    """Return the custom job (Area 2) with this id from session state, if any."""
+    for job in st.session_state.get("custom_jobs") or []:
+        if str(job.get("document_id") or "") == document_id:
+            return job
+    return None
+
+
+def _custom_job_text(job: dict) -> str:
+    """Description plus requirements, so skill matching sees the requirements."""
+    description = str(job.get("description") or "").strip()
+    requirements = [
+        str(item).strip() for item in (job.get("requirements") or []) if str(item).strip()
+    ]
+    if requirements:
+        description = f"{description}\nRequirements: {'; '.join(requirements)}".strip()
+    return description
+
+
 def _job_description(document_id: str) -> str:
+    # Session state first (custom jobs), then the shipped jobs.jsonl.
+    custom = _find_custom_job(document_id)
+    if custom is not None:
+        return _custom_job_text(custom)
     for job in load_jobs():
         if job.document_id == document_id:
             return job.description
@@ -454,7 +505,9 @@ def _gated_tool_error_message(tool_name: str, observation: dict) -> str:
 
 def _select_job(job: dict) -> None:
     profile = st.session_state.profile
-    description = _job_description(str(job.get("document_id") or ""))
+    description = str(job.get("description") or "").strip() or _job_description(
+        str(job.get("document_id") or "")
+    )
     title = str(job.get("title") or "")
     client = llm_client.get_gemini_client()
     diagnostics: dict = {}
@@ -472,6 +525,9 @@ def _select_job(job: dict) -> None:
     sections = _split_cv_markdown(markdown)
     _clear_cv_widget_keys()
     st.session_state.selected_job = job
+    st.session_state.analysis_issues = []  # issues belonged to the old CV
+    st.session_state.analysis_snapshot = {}
+    st.session_state.analysis_diagnostics = {}
     st.session_state.cv_sections = sections
     st.session_state.cv_sections_original = dict(sections)
     st.session_state.cv_section_order = [name for name in sections if name != "Summary"]
@@ -595,31 +651,77 @@ def _render_demo_cards() -> None:
                         st.rerun()
 
 
+def _render_job_card(job: dict, selected_id: str | None, tag: str = "") -> None:
+    document_id = job.get("document_id")
+    title = job.get("title") or document_id or "Untitled job"
+    score = job.get("similarity_score")
+    score_text = f"{score:.4f}" if isinstance(score, (int, float)) else "n/a"
+    with st.container(border=True):
+        heading = title
+        if document_id == selected_id:
+            heading = f"{title} (selected)"
+        st.markdown(f"**{heading}**{tag}")
+        if tag:
+            meta = " · ".join(
+                str(part) for part in (job.get("location"), job.get("job_type")) if part
+            )
+            if meta:
+                st.caption(meta)
+        else:
+            st.caption(f"similarity_score: {score_text}")
+        st.write(job.get("supporting_excerpt") or "")
+        st.write(job.get("gap_analysis") or "")
+        if st.button("Generate CV for this job", key=f"select_{document_id}"):
+            _select_job(job)
+            st.rerun()
+
+
+def _custom_job_card(custom: dict) -> dict:
+    """Shape a custom job like a retrieved match, with a cached gap analysis."""
+    if not custom.get("gap_analysis"):
+        client = llm_client.get_gemini_client()
+        if client is None:
+            custom["gap_analysis"] = GAP_ANALYSIS_FALLBACK
+        else:
+            custom["gap_analysis"] = generate_gap_analysis(
+                client,
+                st.session_state.profile,
+                {"title": custom.get("title", ""), "description": _custom_job_text(custom)},
+            )
+    requirements = [str(item) for item in (custom.get("requirements") or [])]
+    return {
+        "document_id": custom.get("document_id"),
+        "title": custom.get("title"),
+        "location": custom.get("location"),
+        "job_type": custom.get("job_type"),
+        "description": _custom_job_text(custom),
+        "supporting_excerpt": "; ".join(requirements[:3]),
+        "gap_analysis": custom["gap_analysis"],
+        "similarity_score": None,
+    }
+
+
 def _render_jobs() -> None:
-    if not st.session_state.job_matches:
+    custom_jobs = st.session_state.custom_jobs
+    if not st.session_state.job_matches and not custom_jobs:
         return
 
-    st.subheader("Matching jobs")
     selected_id = None
     if st.session_state.selected_job:
         selected_id = st.session_state.selected_job.get("document_id")
 
+    if st.session_state.job_matches:
+        st.subheader("Matching jobs")
     for job in st.session_state.job_matches:
-        document_id = job.get("document_id")
-        title = job.get("title") or document_id or "Untitled job"
-        score = job.get("similarity_score")
-        score_text = f"{score:.4f}" if isinstance(score, (int, float)) else "n/a"
-        with st.container(border=True):
-            heading = title
-            if document_id == selected_id:
-                heading = f"{title} (selected)"
-            st.markdown(f"**{heading}**")
-            st.caption(f"similarity_score: {score_text}")
-            st.write(job.get("supporting_excerpt") or "")
-            st.write(job.get("gap_analysis") or "")
-            if st.button("Generate CV for this job", key=f"select_{document_id}"):
-                _select_job(job)
-                st.rerun()
+        _render_job_card(job, selected_id)
+
+    if custom_jobs:
+        st.subheader("Your job ads")
+        if not st.session_state.profile.is_confirmed:
+            st.info("Confirm your profile first, then you can generate a CV for these jobs.")
+            return
+        for custom in custom_jobs:
+            _render_job_card(_custom_job_card(custom), selected_id, tag=" · custom ad")
 
 
 def _store_cv_pdf(markdown: str) -> None:
@@ -762,8 +864,12 @@ def main() -> None:
     _render_sidebar_reset()
     _render_demo_cards()
     _render_chat_fragment()
+    render_job_input_panel()
     _render_jobs()
     _render_cv_editor()
+    if st.session_state.selected_job and st.session_state.cv_sections:
+        render_analyst_panel()
+        render_evidence_panel()
 
 
 try:

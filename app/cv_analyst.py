@@ -726,7 +726,7 @@ def _unaddressed_requirement_issues(
                     else f'The job ad asks for "{item}", and your CV doesn\'t mention it.'
                 ),
                 suggestion=(
-                    "If you have done this in a project, course or job, add it "
+                    f'If you have done "{item}" in a project, course or job, add it '
                     "there. If not, leave it out rather than adding it to match."
                 ),
                 question=f'Have you done anything involving "{item}", even in coursework?',

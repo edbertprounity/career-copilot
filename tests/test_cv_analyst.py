@@ -754,6 +754,10 @@ def test_docker_requirement_is_flagged_for_a_cv_without_docker(
     assert issue.quote in job["description"]
     assert issue.why == f'The job ad asks for "{quote}", and your CV doesn\'t mention it.'
     assert f'"{quote}"' in issue.question
+    assert issue.suggestion == (
+        f'If you have done "{quote}" in a project, course or job, add it there. '
+        "If not, leave it out rather than adding it to match."
+    )
 
 
 def test_docker_requirement_is_addressed_by_a_cv_with_docker() -> None:
@@ -769,6 +773,16 @@ def test_preferred_requirement_is_low() -> None:
     )
     assert [(i.quote, i.severity) for i in issues] == [("Kubernetes", "low")]
     assert 'lists "Kubernetes" as preferred' in issues[0].why
+    assert issues[0].suggestion.startswith('If you have done "Kubernetes" in a project')
+
+
+@pytest.mark.parametrize("job_id", sorted(JOBS))
+def test_every_requirement_suggestion_names_its_item(job_id: str) -> None:
+    for document_id in DEMO_IDS:
+        profile = _demo_profile(document_id)
+        issues = _job_ad_issues(profile, _cv_sections(profile, job_id), JOBS[job_id])
+        for issue in issues:
+            assert f'"{issue.quote}"' in issue.suggestion, issue.suggestion
 
 
 def test_filler_requirement_items_are_dropped() -> None:

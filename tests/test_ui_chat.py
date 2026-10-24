@@ -75,6 +75,7 @@ def test_compose_attachment_note_lists_extracted_facts_only() -> None:
         "here you go",
         [(b"x", "transcript.pdf", "application/pdf")],
         {
+            "student_name": "Edber Tan",
             "skills": [{"skill": "Python"}],
             "education": [{"degree": "BSc Computing", "institution": "UTS"}],
             "work_experience": [],
@@ -83,6 +84,7 @@ def test_compose_attachment_note_lists_extracted_facts_only() -> None:
         },
     )
     assert "transcript.pdf" in note
+    assert "name: Edber Tan" in note
     assert "skill: Python" in note
     assert "BSc Computing" in note
     assert "do not invent" in note

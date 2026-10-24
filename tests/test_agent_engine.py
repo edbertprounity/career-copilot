@@ -10,9 +10,11 @@ from app.agent_engine import (
     CONFIRM_PROMPT,
     ELABORATION_QUESTION_TAIL,
     MAX_TURNS,
+    apply_extracted_profile_facts,
     detect_thin_content,
     finalize_and_confirm_profile,
     inspect_completeness,
+    name_from_user_reply,
     retrieve_matching_jobs,
     run_agent_turn,
     update_profile_field,
@@ -442,3 +444,68 @@ def test_explicit_confirm_allowed_while_thin_items_remain(
     assert step.tool_name == "finalize_and_confirm_profile"
     assert step.observation["status"] == "success"
     assert complete_profile.is_confirmed is True
+
+
+def test_extracted_cv_writes_name_and_education(empty_profile: StudentProfile) -> None:
+    result = apply_extracted_profile_facts(
+        empty_profile,
+        {
+            "student_name": "Edber Tan",
+            "education": [
+                {
+                    "degree": "Bachelor of Computing Science",
+                    "institution": "University of Technology Sydney",
+                    "year": "2026",
+                }
+            ],
+            "skills": [{"skill": "Python"}],
+            "projects": [],
+            "work_experience": [],
+        },
+    )
+    assert result["status"] == "success"
+    assert empty_profile.name == "Edber Tan"
+    assert empty_profile.degree == "Bachelor of Computing Science"
+    assert empty_profile.institution == "University of Technology Sydney"
+    assert empty_profile.technical_skills == ["Python"]
+    assert "name" not in inspect_completeness(empty_profile)["missing_fields"]
+
+
+def test_extracted_facts_do_not_overwrite_existing_name(
+    complete_profile: StudentProfile,
+) -> None:
+    apply_extracted_profile_facts(
+        complete_profile, {"student_name": "Someone Else", "skills": []}
+    )
+    assert complete_profile.name == "Test Student"
+
+
+def test_name_reply_is_written_without_asking_again(
+    empty_profile: StudentProfile, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    history = [{"role": "assistant", "content": "What is your full name?"}]
+
+    def stub_call(_client, **_kwargs):
+        return {
+            "thought": "Still need the name.",
+            "tool_name": "ask_targeted_follow_up",
+            "parameters": {"missing_fields": ["name"]},
+            "assistant_message": "What is your full name?",
+        }
+
+    monkeypatch.setattr(ae, "get_gemini_client", lambda: object())
+    monkeypatch.setattr(ae, "call_gemini_json", stub_call)
+    step = run_agent_turn(empty_profile, history, "Edber Tan", 2)
+    assert empty_profile.name == "Edber Tan"
+    assert "What is your full name?" not in step.assistant_message
+    assert "name" not in inspect_completeness(empty_profile)["missing_fields"]
+
+
+def test_name_from_user_reply_ignores_unrelated_text(
+    empty_profile: StudentProfile,
+) -> None:
+    history = [{"role": "assistant", "content": "What is your full name?"}]
+    assert name_from_user_reply("I like Python", history, empty_profile) is None
+    assert name_from_user_reply("My name is Edber Tan", history, empty_profile) == (
+        "Edber Tan"
+    )

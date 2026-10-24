@@ -120,6 +120,143 @@ _EXPLICIT_CONTINUE_RE = re.compile(
     re.I,
 )
 
+_NAME_PREFIX_RE = re.compile(
+    r"^(my name is|i am|i'm|im|this is|it's|it is)\s+",
+    re.I,
+)
+_NAME_TOKEN_RE = re.compile(r"^[A-Za-z][A-Za-z.'’\-]*$")
+_NAME_STOP = frozenset(
+    {
+        "yes",
+        "yeah",
+        "yep",
+        "ok",
+        "okay",
+        "no",
+        "confirm",
+        "python",
+        "java",
+        "uts",
+        "sydney",
+    }
+)
+
+
+def extracted_profile_updates(
+    profile: StudentProfile, extracted: dict | None
+) -> dict:
+    """Fill empty profile fields from extracted document facts. Does not invent."""
+    extracted = extracted if isinstance(extracted, dict) else {}
+    updates: dict = {}
+    name = str(extracted.get("student_name") or "").strip()
+    if name and not profile.name.strip():
+        updates["name"] = name
+    for item in extracted.get("education") or []:
+        if not isinstance(item, dict):
+            continue
+        degree = str(item.get("degree") or "").strip()
+        institution = str(item.get("institution") or "").strip()
+        year = str(item.get("year") or "").strip()
+        if degree and not profile.degree.strip():
+            updates["degree"] = degree
+        if institution and not profile.institution.strip():
+            updates["institution"] = institution
+        if year and not profile.year.strip():
+            updates["year"] = year
+        break
+    skills = [
+        str(item.get("skill") or "").strip()
+        for item in (extracted.get("skills") or [])
+        if isinstance(item, dict) and str(item.get("skill") or "").strip()
+    ]
+    if skills:
+        merged = list(profile.technical_skills)
+        for skill in skills:
+            if skill not in merged:
+                merged.append(skill)
+        if merged != list(profile.technical_skills):
+            updates["technical_skills"] = merged
+    if not profile.projects:
+        projects = []
+        for item in extracted.get("projects") or []:
+            if not isinstance(item, dict):
+                continue
+            title = str(item.get("title") or "").strip()
+            if not title:
+                continue
+            projects.append(
+                {
+                    "title": title,
+                    "context": str(item.get("context") or ""),
+                    "description": str(item.get("description") or ""),
+                    "technologies": [
+                        str(tech).strip()
+                        for tech in (item.get("technologies") or [])
+                        if str(tech).strip()
+                    ],
+                }
+            )
+        if projects:
+            updates["projects"] = projects
+    if not profile.experience:
+        experience = []
+        for item in extracted.get("work_experience") or []:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip()
+            if not role:
+                continue
+            experience.append(
+                {
+                    "role": role,
+                    "organisation": str(item.get("organisation") or ""),
+                    "type": str(item.get("type") or ""),
+                    "description": str(item.get("description") or ""),
+                }
+            )
+        if experience:
+            updates["experience"] = experience
+    return updates
+
+
+def apply_extracted_profile_facts(
+    profile: StudentProfile, extracted: dict | None
+) -> dict:
+    updates = extracted_profile_updates(profile, extracted)
+    if not updates:
+        return {"status": "skipped", "updated_fields": []}
+    return update_profile_field(profile, updates)
+
+
+def _looks_like_person_name(text: str) -> str | None:
+    cleaned = _NAME_PREFIX_RE.sub("", (text or "").strip()).strip(" .")
+    parts = cleaned.split()
+    if not 1 <= len(parts) <= 5:
+        return None
+    if not all(_NAME_TOKEN_RE.match(part) for part in parts):
+        return None
+    if {part.lower() for part in parts} & _NAME_STOP:
+        return None
+    return " ".join(parts)
+
+
+def name_from_user_reply(
+    user_message: str,
+    conversation_history: list[dict] | None,
+    profile: StudentProfile,
+) -> str | None:
+    """If the last question asked for a name and the reply is a name, return it."""
+    if profile.name.strip():
+        return None
+    last = _last_assistant_content(conversation_history).lower()
+    if not any(
+        needle in last
+        for needle in ("full name", "your name", "what's your name", "whats your name")
+    ):
+        return None
+    return _looks_like_person_name(user_message)
+
+
 def update_profile_field(profile: StudentProfile, updates: dict) -> dict:
     """Write one or more top-level profile fields. Does not set is_confirmed."""
     if not isinstance(updates, dict):
@@ -379,6 +516,11 @@ def run_agent_turn(
         return _step_limit_reached(profile, turn_number)
 
     before = profile.model_dump()
+    supplied_name = name_from_user_reply(
+        user_message, conversation_history, profile
+    )
+    if supplied_name:
+        update_profile_field(profile, {"name": supplied_name})
     client = get_gemini_client()
 
     if client is None:
@@ -435,6 +577,13 @@ def run_agent_turn(
             parameters=parameters,
             assistant_message=assistant_message,
         )
+
+    if supplied_name:
+        if tool_name in {"ask_targeted_follow_up", "none", ""}:
+            tool_name = "update_profile_field"
+            parameters = {"updates": {"name": supplied_name}}
+        if _asks_for_name(assistant_message):
+            assistant_message = ""
 
     if (
         _user_confirms_profile(user_message, conversation_history)
@@ -681,6 +830,14 @@ _AFFIRM_RE = re.compile(
     r"^\s*(yes|yeah|yep|y|ok|okay|sure|it is|yes it is|yes it looks right)\s*[.!]*\s*$",
     re.I,
 )
+
+
+def _asks_for_name(text: str) -> bool:
+    last = (text or "").lower()
+    return any(
+        needle in last
+        for needle in ("full name", "your name", "what's your name", "whats your name")
+    )
 
 
 def _last_assistant_content(conversation_history: list[dict] | None) -> str:

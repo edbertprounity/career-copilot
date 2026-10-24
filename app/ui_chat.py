@@ -133,6 +133,9 @@ def compose_attachment_note(
 
 def _extraction_lines(extracted: dict) -> list[str]:
     lines: list[str] = []
+    name = str(extracted.get("student_name") or "").strip()
+    if name:
+        lines.append(f"- name: {name}")
     for item in extracted.get("skills") or []:
         skill = str((item or {}).get("skill") or "").strip()
         if skill:
@@ -229,6 +232,9 @@ def _render_block(block: dict) -> None:
 
 def _render_evidence_block(extracted: dict) -> None:
     rows = []
+    name = str(extracted.get("student_name") or "").strip()
+    if name:
+        rows.append(f"- **Name:** {name}")
     for group, field, label in (
         ("skills", "skill", "Skill"),
         ("education", "degree", "Education"),

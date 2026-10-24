@@ -10,7 +10,11 @@ from pathlib import Path
 import streamlit as st
 
 import app.vector_store as vector_store
-from app.agent_engine import inspect_completeness, run_agent_turn
+from app.agent_engine import (
+    apply_extracted_profile_facts,
+    inspect_completeness,
+    run_agent_turn,
+)
 import app.llm_client as llm_client
 from app.cv_generator import (
     cv_layout,
@@ -594,6 +598,8 @@ def _handle_chat_evidence(user_message: str, files: list[tuple[bytes, str, str]]
         )
         return
     extracted = extract_evidence_from_files(client, files)
+    if not st.session_state.profile.is_confirmed:
+        apply_extracted_profile_facts(st.session_state.profile, extracted)
     note = compose_attachment_note(user_message, files, extracted)
     if st.session_state.conversation_history:
         st.session_state.conversation_history[-1]["agent_content"] = note

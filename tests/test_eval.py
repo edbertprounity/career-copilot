@@ -2,6 +2,9 @@
 
 from __future__ import annotations
 
+import pytest
+
+import app.cv_analyst as cv_analyst
 from eval import run_eval as ev
 from app.schemas import StudentProfile
 
@@ -87,3 +90,25 @@ def test_evaluate_and_table_for_dry_run() -> None:
     table = ev.render_table(result, dry_run=True)
     assert "DRY RUN" in table and table.count("| ") > 10
     assert "Maya Chen" in table
+
+
+@pytest.mark.parametrize(
+    ("argv", "use_gemini"),
+    [(["--limit", "1"], False), (["--limit", "1", "--gemini"], True)],
+    ids=["default", "gemini-flag"],
+)
+def test_main_passes_the_gemini_flag_to_the_analyser(
+    monkeypatch: pytest.MonkeyPatch, tmp_path, argv: list[str], use_gemini: bool
+) -> None:
+    seen: list[bool] = []
+
+    def fake_analyse_cv(profile, sections, job, *, use_gemini=True, diagnostics=None):
+        seen.append(use_gemini)
+        return []
+
+    monkeypatch.setattr(cv_analyst, "analyse_cv", fake_analyse_cv)
+    monkeypatch.setattr(ev, "RESULTS_DIR", tmp_path)
+
+    assert ev.main(argv) == 0
+    assert seen and set(seen) == {use_gemini}
+    assert (tmp_path / "results.md").exists() and (tmp_path / "results.json").exists()

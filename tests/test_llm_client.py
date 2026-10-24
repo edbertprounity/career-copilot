@@ -135,6 +135,29 @@ def test_call_gemini_parts_json_reraises_existing_api_error() -> None:
     assert caught.value is original
 
 
+def test_call_gemini_retries_once_on_503(monkeypatch: pytest.MonkeyPatch) -> None:
+    class _BusyThenOk:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def generate_content(self, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                error = RuntimeError(
+                    "503 UNAVAILABLE. This model is currently experiencing high demand."
+                )
+                error.code = 503
+                raise error
+            return SimpleNamespace(text='{"status": "ok"}')
+
+    models = _BusyThenOk()
+    client = SimpleNamespace(models=models)
+    monkeypatch.setattr("app.llm_client.time.sleep", lambda _seconds: None)
+    result = call_gemini_json(client, "Return JSON only.", "hi")
+    assert result == {"status": "ok"}
+    assert models.calls == 2
+
+
 def test_call_gemini_json_still_sends_text_contents() -> None:
     client = _FakeClient(response=SimpleNamespace(text='{"status": "ok"}'))
     result = call_gemini_json(

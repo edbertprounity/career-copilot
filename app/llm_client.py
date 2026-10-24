@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 
 from dotenv import load_dotenv
 from google import genai
@@ -12,6 +13,7 @@ from google.genai import types
 _client: genai.Client | None = None
 
 GEMINI_MODEL = "gemini-3.6-flash"
+UNAVAILABLE_RETRY_SECONDS = 2
 
 
 class GeminiAPIError(Exception):
@@ -74,6 +76,28 @@ def _parse_json_object_response(response: object) -> dict:
     return parsed
 
 
+def _is_unavailable(exc: BaseException) -> bool:
+    """True for a busy-model 503 UNAVAILABLE from the Gemini SDK."""
+    if getattr(exc, "code", None) == 503:
+        return True
+    text = str(exc)
+    return "503" in text and "UNAVAILABLE" in text
+
+
+def _generate_content(
+    client: genai.Client,
+    *,
+    model: str,
+    contents: object,
+    config: types.GenerateContentConfig,
+) -> object:
+    return client.models.generate_content(
+        model=model,
+        contents=contents,
+        config=config,
+    )
+
+
 def _generate_json_object(
     client: genai.Client,
     *,
@@ -82,12 +106,30 @@ def _generate_json_object(
     system_instruction: str,
     response_schema: dict | None,
 ) -> dict:
+    config = _json_generate_config(system_instruction, response_schema)
     try:
-        response = client.models.generate_content(
-            model=model,
-            contents=contents,
-            config=_json_generate_config(system_instruction, response_schema),
-        )
+        try:
+            response = _generate_content(
+                client, model=model, contents=contents, config=config
+            )
+        except GeminiAPIError:
+            raise
+        except Exception as exc:
+            if not _is_unavailable(exc):
+                raise GeminiAPIError(
+                    f"Gemini generate_content failed: {exc}"
+                ) from exc
+            time.sleep(UNAVAILABLE_RETRY_SECONDS)
+            try:
+                response = _generate_content(
+                    client, model=model, contents=contents, config=config
+                )
+            except GeminiAPIError:
+                raise
+            except Exception as retry_exc:
+                raise GeminiAPIError(
+                    f"Gemini generate_content failed: {retry_exc}"
+                ) from retry_exc
     except GeminiAPIError:
         raise
     except Exception as exc:

@@ -19,6 +19,7 @@ _GEMINI_MODULES = (
     "app.ui_analyst",
     "app.ui_evidence",
     "app.ui_job_input",
+    "app.ui_chat",
 )
 _BLOCKED_CALLS = ("call_gemini_json", "call_gemini_parts_json")
 

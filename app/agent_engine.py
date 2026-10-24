@@ -615,7 +615,7 @@ def _format_user_content(
     lines: list[str] = []
     for item in conversation_history or []:
         role = item.get("role", "user")
-        content = item.get("content", "")
+        content = item.get("agent_content") or item.get("content", "")
         lines.append(f"{role}: {content}")
     lines.append(f"user: {user_message}")
     return "\n".join(lines)

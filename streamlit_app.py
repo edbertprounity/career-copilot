@@ -20,12 +20,23 @@ from app.cv_generator import (
 )
 from app.schemas import StudentProfile
 from app.ui_analyst import render_analyst_panel
+from app.ui_chat import (
+    CHAT_FILE_TYPES,
+    attachment_records,
+    classify_chat_intent,
+    compose_attachment_note,
+    normalize_uploads,
+    render_chat_item,
+    split_chat_prompt,
+)
 from app.ui_evidence import render_evidence_panel
 from app.ui_job_input import (
     clear_custom_job,
     init_job_input_state,
     render_job_input_panel,
 )
+import app.job_input as job_input
+from app.evidence import extract_evidence_from_files
 from app.vector_store import (
     GAP_ANALYSIS_FALLBACK,
     generate_gap_analysis,
@@ -456,24 +467,151 @@ def _maybe_load_jobs() -> None:
     st.session_state.job_matches = search_top_jobs(profile)
 
 
-def _handle_user_message(user_message: str) -> None:
+def _handle_user_message(user_message: str, uploads: object | None = None) -> None:
+    files = normalize_uploads(uploads)
+    attachments = attachment_records(files)
+    display = user_message or (
+        "Attached " + ", ".join(item["name"] for item in attachments)
+        if attachments
+        else ""
+    )
+    intent = classify_chat_intent(
+        user_message,
+        files,
+        profile_confirmed=bool(st.session_state.profile.is_confirmed),
+        has_selected_job=bool(st.session_state.selected_job),
+        chat_locked=_chat_locked(),
+    )
+    st.session_state.conversation_history.append(
+        {
+            "role": "user",
+            "content": display,
+            "attachments": attachments,
+        }
+    )
+    if intent == "locked":
+        st.session_state.conversation_history.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "Profile chat is paused because matching jobs are already "
+                    "loaded. Attach a job-ad screenshot or PDF here, or use "
+                    "Start New Profile to begin again."
+                ),
+            }
+        )
+        return
+    if intent == "job":
+        _handle_chat_job(user_message, files)
+        return
+    if intent == "evidence":
+        _handle_chat_evidence(user_message, files)
+        return
+    _run_profile_agent_turn(user_message)
+
+
+def _run_profile_agent_turn(user_message: str, extra_blocks: list | None = None) -> None:
     profile = st.session_state.profile
     st.session_state.turn_number += 1
     step = run_agent_turn(
         profile,
-        st.session_state.conversation_history,
+        st.session_state.conversation_history[:-1],
         user_message,
         st.session_state.turn_number,
     )
+    blocks = list(extra_blocks or [])
+    observation = step.observation if isinstance(step.observation, dict) else {}
+    matches = observation.get("matches")
+    if step.tool_name == "retrieve_matching_jobs" and matches:
+        blocks.append({"type": "job_cards", "jobs": matches})
     st.session_state.conversation_history.append(
-        {"role": "user", "content": user_message}
-    )
-    st.session_state.conversation_history.append(
-        {"role": "assistant", "content": _chat_assistant_content(step)}
+        {
+            "role": "assistant",
+            "content": _chat_assistant_content(step),
+            "blocks": blocks,
+        }
     )
     st.session_state.agent_trace.append(step.model_dump())
     st.session_state.profile = profile
     _maybe_load_jobs()
+
+
+def _handle_chat_job(user_message: str, files: list[tuple[bytes, str, str]]) -> None:
+    client = llm_client.get_gemini_client()
+    if client is None:
+        st.session_state.conversation_history.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "Job parsing needs a Gemini API key. Add GEMINI_API_KEY "
+                    "to your .env file."
+                ),
+            }
+        )
+        return
+    try:
+        if files:
+            parsed = job_input.parse_job_from_files(client, files)
+        else:
+            parsed = job_input.parse_job_description(client, user_message)
+    except job_input.JobInputError as exc:
+        text = str(exc)
+        if "503" in text or "UNAVAILABLE" in text:
+            text = (
+                "Gemini was busy (503). I retried once. Please send the job "
+                "ad again in a few seconds."
+            )
+        else:
+            text = f"Couldn't parse that job posting: {exc}"
+        st.session_state.conversation_history.append(
+            {"role": "assistant", "content": text}
+        )
+        return
+    st.session_state["parsed_job"] = parsed
+    st.session_state.conversation_history.append(
+        {
+            "role": "assistant",
+            "content": (
+                "I read that as a job ad. Check the fields below, then click "
+                "Use this job in the Custom job posting panel."
+            ),
+            "blocks": [{"type": "parsed_job", "parsed": parsed}],
+        }
+    )
+
+
+def _handle_chat_evidence(user_message: str, files: list[tuple[bytes, str, str]]) -> None:
+    client = llm_client.get_gemini_client()
+    if client is None:
+        st.session_state.conversation_history.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "Reading attachments needs a Gemini API key. Add "
+                    "GEMINI_API_KEY to your .env file."
+                ),
+            }
+        )
+        return
+    extracted = extract_evidence_from_files(client, files)
+    note = compose_attachment_note(user_message, files, extracted)
+    if st.session_state.conversation_history:
+        st.session_state.conversation_history[-1]["agent_content"] = note
+    extra = [{"type": "evidence", "extracted": extracted}]
+    if st.session_state.profile.is_confirmed and st.session_state.selected_job:
+        st.session_state.conversation_history.append(
+            {
+                "role": "assistant",
+                "content": (
+                    "I pulled these facts from your attachment. Add a skill "
+                    "from the Evidence panel if you want it on your profile."
+                ),
+                "blocks": extra,
+            }
+        )
+        st.session_state["pending_evidence"] = extracted
+        return
+    _run_profile_agent_turn(note, extra_blocks=extra)
 
 
 def _chat_assistant_content(step) -> str:
@@ -535,6 +673,20 @@ def _select_job(job: dict) -> None:
         st.session_state[_widget_key(name)] = content
     _sync_order_widget_keys(_present_reorderable())
     _store_cv_pdf(markdown)
+    st.session_state.conversation_history.append(
+        {
+            "role": "assistant",
+            "content": f"Here's a draft CV for {title or 'this job'}.",
+            "blocks": [
+                {
+                    "type": "cv",
+                    "markdown": _reassemble_cv(sections),
+                    "pdf_bytes": st.session_state.pdf_bytes,
+                    "download_key": f"chat_cv_{job.get('document_id') or 'job'}",
+                }
+            ],
+        }
+    )
 
 
 def _sync_sections_from_widgets() -> None:
@@ -595,17 +747,15 @@ def _render_chat_fragment() -> None:
     if st.session_state.skip_to_jobs_note:
         st.success(SKIP_NOTE)
     for item in st.session_state.conversation_history:
-        role = item.get("role", "user")
-        if role not in ("user", "assistant"):
-            role = "user"
-        with st.chat_message(role):
-            st.write(item.get("content") or "")
+        render_chat_item(item)
 
-    if _chat_locked():
+    locked = _chat_locked()
+    if locked:
         if st.session_state.job_matches:
             st.info(
-                "Chat is paused because matching jobs are loaded. "
-                "This avoids a second retrieval. Use Start New Profile to begin again."
+                "Profile chat is paused because matching jobs are loaded. "
+                "You can still attach a job ad or evidence in the box below. "
+                "Use Start New Profile to begin again."
             )
         elif _last_tool_name() == "step_limit_reached":
             st.info(
@@ -614,14 +764,23 @@ def _render_chat_fragment() -> None:
                 "Use Start New Profile in the sidebar to begin again."
             )
         else:
-            st.info("The agent is no longer accepting input for this profile.")
-        return
+            st.info("The agent is no longer accepting profile text for this session.")
 
-    prompt = st.chat_input("Describe your background, or answer the agent's question.")
-    if prompt and prompt.strip():
+    placeholder = (
+        "Attach a job ad or evidence, or Start New Profile."
+        if locked and st.session_state.job_matches
+        else "Type a reply, or attach a screenshot / PDF."
+    )
+    prompt = st.chat_input(
+        placeholder,
+        accept_file="multiple",
+        file_type=CHAT_FILE_TYPES,
+    )
+    text, files = split_chat_prompt(prompt)
+    if text or files:
         had_jobs = bool(st.session_state.job_matches)
         with st.spinner("Thinking..."):
-            _handle_user_message(prompt.strip())
+            _handle_user_message(text, files)
         if st.session_state.job_matches and not had_jobs:
             st.rerun()
         st.rerun(scope="fragment")

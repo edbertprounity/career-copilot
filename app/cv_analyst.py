@@ -17,7 +17,6 @@ import hashlib
 import json
 import re
 import sys
-import time
 from collections.abc import Iterator
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -56,7 +55,6 @@ PROFILES_PATH = JOBS_PATH.parent / "student_profiles.jsonl"
 # the draft carries every fact the issue rests on.
 FEEDBACK_FIELDS = ("why", "suggestion", "question")
 MAX_FIELD_CHARS = 300
-UNAVAILABLE_RETRY_SECONDS = 2
 # The name line and contact details never leave the machine.
 _PRIVATE_SECTIONS = frozenset({"Summary", "Contact"})
 _FEEDBACK_SYSTEM_INSTRUCTION = (
@@ -728,7 +726,7 @@ def _unaddressed_requirement_issues(
                     else f'The job ad asks for "{item}", and your CV doesn\'t mention it.'
                 ),
                 suggestion=(
-                    "If you have done this in a project, course or job, add it "
+                    f'If you have done "{item}" in a project, course or job, add it '
                     "there. If not, leave it out rather than adding it to match."
                 ),
                 question=f'Have you done anything involving "{item}", even in coursework?',
@@ -994,17 +992,16 @@ def _write_feedback(
     """Let Gemini rewrite the issues' text; keep the template wherever it fails.
 
     Returns diagnostics: path (gemini, partial or template), the batch-level
-    reason and detail, how many times a busy model was retried, and per
-    issue_id its source (gemini or template) with the reason it fell back.
-    A batch-level failure's detail is kept once, at the top level.
+    reason and detail, and per issue_id its source (gemini or template) with
+    the reason it fell back. A batch-level failure's detail is kept once, at
+    the top level.
     """
     per_issue = {
         issue.issue_id: {"source": "template", "reason": "", "detail": ""}
         for issue in issues
     }
-    batch = {"retries": 0}
     reason, detail = _gemini_rewrite(
-        issues, sections, profile, job_title, use_gemini, per_issue, batch
+        issues, sections, profile, job_title, use_gemini, per_issue
     )
     for entry in per_issue.values():
         if entry["source"] == "template" and not entry["reason"]:
@@ -1016,13 +1013,7 @@ def _write_feedback(
         path = "gemini"
     else:
         path = "partial"
-    return {
-        "path": path,
-        "reason": reason,
-        "detail": detail,
-        "retries": batch["retries"],
-        "issues": per_issue,
-    }
+    return {"path": path, "reason": reason, "detail": detail, "issues": per_issue}
 
 
 def _gemini_rewrite(
@@ -1032,12 +1023,11 @@ def _gemini_rewrite(
     job_title: str,
     use_gemini: bool,
     per_issue: dict[str, dict],
-    batch: dict,
 ) -> tuple[str, str]:
     """One batched call. Returns a batch-level (reason, detail), empty on success.
 
-    A 503 UNAVAILABLE (the model is busy) is retried once after
-    UNAVAILABLE_RETRY_SECONDS; any other error falls back at once.
+    A busy model (503 UNAVAILABLE) is retried once inside llm_client; any
+    error it raises here falls back to templates at once.
     """
     if not issues:
         return "no_issues", ""
@@ -1064,14 +1054,7 @@ def _gemini_rewrite(
         "response_schema": _FEEDBACK_RESPONSE_SCHEMA,
     }
     try:
-        try:
-            parsed = llm_client.call_gemini_json(client, **request)
-        except llm_client.GeminiAPIError as exc:
-            if not _model_unavailable(exc):
-                raise
-            batch["retries"] = 1
-            time.sleep(UNAVAILABLE_RETRY_SECONDS)
-            parsed = llm_client.call_gemini_json(client, **request)
+        parsed = llm_client.call_gemini_json(client, **request)
     except llm_client.GeminiAPIError as exc:
         return "api", str(exc)
     except llm_client.GeminiJSONParseError as exc:
@@ -1103,11 +1086,6 @@ def _gemini_rewrite(
         )
         entry["source"] = "gemini"
     return "", ""
-
-
-def _model_unavailable(exc: Exception) -> bool:
-    """True for a 503 UNAVAILABLE. llm_client keeps the SDK error as the cause."""
-    return getattr(exc.__cause__, "code", None) == 503
 
 
 def _payload_issue(
@@ -1278,8 +1256,6 @@ def _source_summary(diagnostics: dict, total: int) -> str:
     if fallbacks:
         listed = ", ".join(f"{reason} {count}" for reason, count in fallbacks.items())
         summary += f"; template for {total - from_gemini} ({listed})"
-    if diagnostics.get("retries"):
-        summary += "; retried once after 503 UNAVAILABLE"
     if diagnostics.get("detail"):
         summary += f"; batch error: {diagnostics['detail']}"
     return summary

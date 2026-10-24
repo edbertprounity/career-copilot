@@ -5,25 +5,25 @@ Text: template for all 9 issues (Gemini not requested; add --gemini)
 1. [medium] low_relevance | Job ad
    quote:      statistics
    why:        The job ad asks for "statistics", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "statistics" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "statistics", even in coursework?
 
 2. [medium] low_relevance | Job ad
    quote:      RAG
    why:        The job ad asks for "RAG", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "RAG" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "RAG", even in coursework?
 
 3. [medium] low_relevance | Job ad
    quote:      domain-specific fine-tuning
    why:        The job ad asks for "domain-specific fine-tuning", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "domain-specific fine-tuning" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "domain-specific fine-tuning", even in coursework?
 
 4. [medium] low_relevance | Job ad
    quote:      software-development practice
    why:        The job ad asks for "software-development practice", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "software-development practice" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "software-development practice", even in coursework?
 
 5. [low] no_evidence | Projects

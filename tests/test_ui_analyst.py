@@ -8,11 +8,11 @@ from pathlib import Path
 import pytest
 from streamlit.testing.v1 import AppTest
 
-import app.cv_analyst as cv_analyst
 import app.llm_client as llm_client
 import app.ui_analyst as ui_analyst
 from app.cv_analyst import _sections_from_markdown, add_skill_evidence, analyse_cv
 from app.cv_generator import generate_cv_markdown
+from app.llm_client import call_gemini_json as REAL_CALL_GEMINI_JSON
 from app.schemas import StudentProfile
 from app.ui_analyst import (
     ANALYSE_BUTTON_KEY,
@@ -343,18 +343,31 @@ def test_gemini_text_is_shown_with_its_caption(monkeypatch: pytest.MonkeyPatch) 
     assert len(stub.calls) == 1
 
 
-def test_raw_error_details_are_never_shown(monkeypatch: pytest.MonkeyPatch) -> None:
-    class _SdkError(Exception):
+def test_busy_gemini_costs_at_most_two_calls_per_press_and_shows_no_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class _BusyError(Exception):
+        """A google.genai 503, which carries .code."""
+
         code = 503
 
-    error = llm_client.GeminiAPIError("Gemini generate_content failed: 503 UNAVAILABLE.")
-    error.__cause__ = _SdkError()
-    stub = _GeminiStub(monkeypatch, error=error)
-    monkeypatch.setattr(cv_analyst.time, "sleep", lambda _seconds: None)
+    calls: list[int] = []
+
+    def always_busy(client, *, model, contents, config):
+        calls.append(1)
+        raise _BusyError("503 UNAVAILABLE. This model is currently experiencing high demand.")
+
+    # The real call_gemini_json and its retry run; only the SDK call is stubbed.
+    monkeypatch.setattr(llm_client, "call_gemini_json", REAL_CALL_GEMINI_JSON)
+    monkeypatch.setattr(llm_client, "get_gemini_client", lambda: "stub-client")
+    monkeypatch.setattr(llm_client, "_generate_content", always_busy)
+    monkeypatch.setattr(llm_client.time, "sleep", lambda _seconds: None)
     maya = _maya()
     at = _press_analyse(_panel(maya, _sections(maya), _selected_job()))
 
-    assert len(stub.calls) == 2  # the analyst's one retry on 503
+    assert len(calls) == 2  # llm_client's one retry, and no second layer
+    at.run()
+    assert len(calls) == 2
     assert "Explanations: deterministic templates (Gemini call failed)." in _captions(at)
     shown = _shown_text(at)
     assert "generate_content" not in shown

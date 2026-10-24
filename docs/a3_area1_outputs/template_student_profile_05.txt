@@ -5,31 +5,31 @@ Text: template for all 12 issues (Gemini not requested; add --gemini)
 1. [medium] low_relevance | Job ad
    quote:      machine-learning fundamentals
    why:        The job ad asks for "machine-learning fundamentals", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "machine-learning fundamentals" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "machine-learning fundamentals", even in coursework?
 
 2. [medium] low_relevance | Job ad
    quote:      statistics
    why:        The job ad asks for "statistics", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "statistics" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "statistics", even in coursework?
 
 3. [medium] low_relevance | Job ad
    quote:      data analysis
    why:        The job ad asks for "data analysis", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "data analysis" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "data analysis", even in coursework?
 
 4. [medium] low_relevance | Job ad
    quote:      LLMs
    why:        The job ad asks for "LLMs", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "LLMs" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "LLMs", even in coursework?
 
 5. [medium] low_relevance | Job ad
    quote:      RAG
    why:        The job ad asks for "RAG", and your CV doesn't mention it.
-   suggestion: If you have done this in a project, course or job, add it there. If not, leave it out rather than adding it to match.
+   suggestion: If you have done "RAG" in a project, course or job, add it there. If not, leave it out rather than adding it to match.
    question:   Have you done anything involving "RAG", even in coursework?
 
 6. [low] no_evidence | Projects

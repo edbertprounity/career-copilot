@@ -15,7 +15,8 @@ Three questions
         and after an unrelated one (which must change nothing).
 
 Run:
-    python -m eval.run_eval                 # live analyser (needs Area 1 + GEMINI_API_KEY)
+    python -m eval.run_eval                 # real analyser, template text, no Gemini calls
+    python -m eval.run_eval --gemini        # real analyser, Gemini writes the explanations (needs GEMINI_API_KEY)
     python -m eval.run_eval --dry-run       # built-in fake analyser, checks the harness only
 Writes eval/results/results.md and eval/results/results.json.
 """
@@ -23,6 +24,7 @@ Writes eval/results/results.md and eval/results/results.json.
 from __future__ import annotations
 
 import argparse
+import functools
 import json
 import re
 import sys
@@ -254,6 +256,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--dry-run", action="store_true", help="use the built-in fake analyser")
     parser.add_argument("--limit", type=int, help="only the first N profiles")
+    parser.add_argument(
+        "--gemini",
+        action="store_true",
+        help="let Gemini write the issue explanations; off by default so results are repeatable",
+    )
     args = parser.parse_args(argv)
 
     if args.dry_run:
@@ -264,7 +271,7 @@ def main(argv: list[str] | None = None) -> int:
         except ImportError:
             print("app.cv_analyst is not merged yet. Use --dry-run to test the harness.", file=sys.stderr)
             return 1
-        analyse = analyse_cv
+        analyse = functools.partial(analyse_cv, use_gemini=args.gemini)
 
     result = evaluate(load_profiles(args.limit), analyse, load_jobs())
     table = render_table(result, args.dry_run)

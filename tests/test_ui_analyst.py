@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 import json
+import sys
+import types
+import zlib
 from pathlib import Path
 
+import numpy as np
 import pytest
+import streamlit as st
 from streamlit.testing.v1 import AppTest
 
 import app.llm_client as llm_client
 import app.ui_analyst as ui_analyst
+import app.vector_store as vector_store
 from app.cv_analyst import _sections_from_markdown, add_skill_evidence, analyse_cv
 from app.cv_generator import generate_cv_markdown
 from app.llm_client import call_gemini_json as REAL_CALL_GEMINI_JSON
@@ -396,3 +402,68 @@ def test_source_caption_names_short_reasons_only() -> None:
         "Gemini text broke a wording rule (1))."
     )
     assert source_caption({}) == ""
+
+
+# The full app: Analyse and revise from the real CV editor
+
+
+APP_PATH = Path(__file__).resolve().parents[1] / "streamlit_app.py"
+
+
+class _FakeEncoder:
+    """Stands in for SentenceTransformer: hashed bag-of-words vectors, no model."""
+
+    def __init__(self, _model_name: str) -> None:
+        pass
+
+    def encode(self, texts, convert_to_numpy: bool = True):
+        def vector(text: str):
+            out = np.zeros(64)
+            for word in str(text).lower().split():
+                out[zlib.crc32(word.encode("utf-8")) % 64] += 1.0
+            return out
+
+        if isinstance(texts, str):
+            return vector(texts)
+        return np.array([vector(text) for text in texts])
+
+
+@pytest.fixture
+def offline_app(monkeypatch: pytest.MonkeyPatch):
+    """The real app with a fake embedding model and no Gemini client."""
+    fake_module = types.ModuleType("sentence_transformers")
+    fake_module.SentenceTransformer = _FakeEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake_module)
+    for name in ("_model", "_jobs", "_embeddings"):
+        monkeypatch.setattr(vector_store, name, None)
+    monkeypatch.setattr(llm_client, "get_gemini_client", lambda: None)
+    st.cache_resource.clear()  # the job index is cached per process
+    yield AppTest.from_file(str(APP_PATH), default_timeout=60)
+    st.cache_resource.clear()  # do not leave the fake index for other tests
+
+
+def test_analyse_and_revise_in_the_full_app(offline_app: AppTest) -> None:
+    at = offline_app.run()
+    assert not at.exception
+    at.button(key="demo_student_profile_01").click().run()
+    assert at.session_state["profile"].name == "Maya Chen"
+    first_job = at.session_state["job_matches"][0]["document_id"]
+    at.button(key=f"select_{first_job}").click().run()
+    assert not at.exception
+
+    skills = at.text_area(key="cvedit_Skills")
+    assert "**Languages:** Python, Java" in skills.value
+    typed = "**Languages:** Python, Java, Kubernetes"
+    skills.input(skills.value.replace("**Languages:** Python, Java", typed)).run()
+    assert "Kubernetes" in at.text_area(key="cvedit_Skills").value
+
+    at.button(key=ANALYSE_BUTTON_KEY).click().run()
+
+    assert not at.exception, [e.value for e in at.exception]
+    revised = at.text_area(key="cvedit_Skills").value
+    assert "**Languages:** Python, Java" in revised
+    assert "Kubernetes" not in revised
+    assert "Kubernetes" not in at.session_state["cv_sections"]["Skills"]
+    pdf = at.session_state["pdf_bytes"]
+    assert pdf and pdf.startswith(b"%PDF")
+    assert "Kubernetes" not in at.session_state["cv_pdf_sections"]["Skills"]

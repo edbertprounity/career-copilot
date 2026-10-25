@@ -20,6 +20,7 @@ from app.cv_analyst import (
     analyse_cv,
     issue_entry,
 )
+from app.cv_revise import revise_cv_sections
 from app.vector_store import load_jobs
 
 ISSUES_KEY = "analysis_issues"
@@ -89,14 +90,28 @@ def render_analysis_panel() -> None:
         st.session_state[ISSUES_KEY] = []
         st.session_state[SNAPSHOT_KEY] = {}
         st.session_state[DIAGNOSTICS_KEY] = {}
-    if st.button("Analyse", key=ANALYSE_BUTTON_KEY):
+    if st.button("Analyse and revise", key=ANALYSE_BUTTON_KEY):
         job = _job_with_description(selected_job)
         diagnostics: dict = {}
-        with st.spinner("Analysing your CV..."):
-            issues = analyse_cv(profile, cv_sections, job, diagnostics=diagnostics)
-        st.session_state[ISSUES_KEY] = [issue.model_dump() for issue in issues]
-        st.session_state[SNAPSHOT_KEY] = current
+        issues = analyse_cv(
+            profile,
+            cv_sections,
+            job,
+            diagnostics=diagnostics,
+        )
+        dumped = [issue.model_dump() for issue in issues]
+        revised, notes = revise_cv_sections(profile, dict(cv_sections), dumped)
+        st.session_state[ISSUES_KEY] = dumped
+        stored = dict(current)
+        stored["cv_sections"] = dict(revised)
+        st.session_state[SNAPSHOT_KEY] = stored
         st.session_state[DIAGNOSTICS_KEY] = diagnostics
+        st.session_state["cv_revision_notes"] = notes
+        st.session_state["cv_sections"] = revised
+        for name, content in revised.items():
+            st.session_state[f"cvedit_{name}"] = content
+        st.session_state["pending_cv_refresh"] = True
+        st.rerun()
 
     snapshot = st.session_state[SNAPSHOT_KEY]
     if not snapshot:
@@ -106,6 +121,11 @@ def render_analysis_panel() -> None:
         st.caption(STALE_CAPTION)
 
     issues = st.session_state[ISSUES_KEY]
+    notes = st.session_state.get("cv_revision_notes") or []
+    if notes:
+        st.markdown("**CV updated from your profile**")
+        for note in notes:
+            st.write(f"- {note}")
     if not issues:
         st.markdown("No issues found.")
         return

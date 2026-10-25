@@ -165,7 +165,7 @@ def _extraction_lines(extracted: dict) -> list[str]:
     return lines
 
 
-def render_chat_item(item: dict) -> None:
+def render_chat_item(item: dict, item_index: int = 0) -> None:
     role = item.get("role", "user")
     if role not in ("user", "assistant"):
         role = "user"
@@ -175,8 +175,8 @@ def render_chat_item(item: dict) -> None:
             st.write(content)
         for attachment in item.get("attachments") or []:
             _render_attachment(attachment)
-        for block in item.get("blocks") or []:
-            _render_block(block)
+        for block_index, block in enumerate(item.get("blocks") or []):
+            _render_block(block, item_index=item_index, block_index=block_index)
 
 
 def _render_attachment(attachment: dict) -> None:
@@ -187,7 +187,13 @@ def _render_attachment(attachment: dict) -> None:
     st.caption(f"Attached: {name}")
 
 
-def _render_block(block: dict) -> None:
+def _cv_download_key(block: dict, item_index: int, block_index: int) -> str:
+    """One widget key per chat CV, even when the same draft is generated twice."""
+    base = str(block.get("download_key") or "chat_cv_pdf")
+    return f"{base}_{item_index}_{block_index}"
+
+
+def _render_block(block: dict, item_index: int = 0, block_index: int = 0) -> None:
     kind = str(block.get("type") or "")
     if kind == "evidence":
         _render_evidence_block(block.get("extracted") or {})
@@ -223,7 +229,7 @@ def _render_block(block: dict) -> None:
                 data=pdf,
                 file_name="career_copilot_cv.pdf",
                 mime="application/pdf",
-                key=str(block.get("download_key") or "chat_cv_pdf"),
+                key=_cv_download_key(block, item_index, block_index),
             )
         return
     if kind == "image" and block.get("data"):

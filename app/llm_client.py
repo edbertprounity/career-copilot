@@ -5,6 +5,8 @@ from __future__ import annotations
 import json
 import os
 import time
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FuturesTimeout
 
 from dotenv import load_dotenv
 from google import genai
@@ -14,6 +16,7 @@ _client: genai.Client | None = None
 
 GEMINI_MODEL = "gemini-3.6-flash"
 UNAVAILABLE_RETRY_SECONDS = 2
+GEMINI_TIMEOUT_SECONDS = 20
 
 
 class GeminiAPIError(Exception):
@@ -91,11 +94,22 @@ def _generate_content(
     contents: object,
     config: types.GenerateContentConfig,
 ) -> object:
-    return client.models.generate_content(
+    pool = ThreadPoolExecutor(max_workers=1)
+    future = pool.submit(
+        client.models.generate_content,
         model=model,
         contents=contents,
         config=config,
     )
+    try:
+        return future.result(timeout=GEMINI_TIMEOUT_SECONDS)
+    except FuturesTimeout as exc:
+        future.cancel()
+        raise GeminiAPIError(
+            "Gemini timed out before replying. Nothing was left running."
+        ) from exc
+    finally:
+        pool.shutdown(wait=False, cancel_futures=True)
 
 
 def _generate_json_object(

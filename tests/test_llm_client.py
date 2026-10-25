@@ -135,6 +135,19 @@ def test_call_gemini_parts_json_reraises_existing_api_error() -> None:
     assert caught.value is original
 
 
+def test_call_gemini_times_out(monkeypatch: pytest.MonkeyPatch) -> None:
+    def hang(**_kwargs):
+        import time
+
+        time.sleep(1)
+        return SimpleNamespace(text='{"status": "ok"}')
+
+    client = SimpleNamespace(models=SimpleNamespace(generate_content=hang))
+    monkeypatch.setattr("app.llm_client.GEMINI_TIMEOUT_SECONDS", 0.05)
+    with pytest.raises(GeminiAPIError, match="timed out"):
+        call_gemini_json(client, "Return JSON only.", "hi")
+
+
 def test_call_gemini_retries_once_on_503(monkeypatch: pytest.MonkeyPatch) -> None:
     class _BusyThenOk:
         def __init__(self) -> None:

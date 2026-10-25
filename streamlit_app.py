@@ -653,7 +653,8 @@ def _select_job(job: dict) -> None:
         str(job.get("document_id") or "")
     )
     title = str(job.get("title") or "")
-    client = llm_client.get_gemini_client()
+    personal = str(job.get("document_id") or "") == "personal_cv"
+    client = None if personal else llm_client.get_gemini_client()
     diagnostics: dict = {}
     if client is None:
         diagnostics = {"path": "fallback", "reason": "no_client", "detail": ""}
@@ -688,7 +689,10 @@ def _select_job(job: dict) -> None:
                     "type": "cv",
                     "markdown": _reassemble_cv(sections),
                     "pdf_bytes": st.session_state.pdf_bytes,
-                    "download_key": f"chat_cv_{job.get('document_id') or 'job'}",
+                    "download_key": (
+                        f"chat_cv_{job.get('document_id') or 'job'}_"
+                        f"{len(st.session_state.conversation_history)}"
+                    ),
                 }
             ],
         }
@@ -752,8 +756,8 @@ def _render_chat_fragment() -> None:
             st.write(_onboarding_message())
     if st.session_state.skip_to_jobs_note:
         st.success(SKIP_NOTE)
-    for item in st.session_state.conversation_history:
-        render_chat_item(item)
+    for index, item in enumerate(st.session_state.conversation_history):
+        render_chat_item(item, item_index=index)
 
     locked = _chat_locked()
     if locked:
@@ -864,6 +868,36 @@ def _custom_job_card(custom: dict) -> dict:
         "gap_analysis": custom["gap_analysis"],
         "similarity_score": None,
     }
+
+
+def _refresh_cv_pdf_if_needed() -> None:
+    if not st.session_state.get("pending_cv_refresh"):
+        return
+    st.session_state.pending_cv_refresh = False
+    if st.session_state.cv_sections:
+        _store_cv_pdf(_reassemble_cv(st.session_state.cv_sections))
+
+
+def _render_personal_cv_action() -> None:
+    """A CV that is not tied to a job card."""
+    if not st.session_state.profile.is_confirmed:
+        return
+    st.subheader("Your CV")
+    st.caption(
+        "You do not have to pick a job. This builds a CV from your profile only."
+    )
+    if st.button("Generate my CV", key="select_personal_cv"):
+        _select_job(
+            {
+                "document_id": "personal_cv",
+                "title": "Personal CV",
+                "description": "",
+                "similarity_score": None,
+                "supporting_excerpt": "Built from your profile, not from a job ad.",
+                "gap_analysis": "",
+            }
+        )
+        st.rerun()
 
 
 def _render_jobs() -> None:
@@ -1030,7 +1064,9 @@ def main() -> None:
     _render_demo_cards()
     _render_chat_fragment()
     render_job_input_panel()
+    _render_personal_cv_action()
     _render_jobs()
+    _refresh_cv_pdf_if_needed()
     _render_cv_editor()
     if st.session_state.selected_job and st.session_state.cv_sections:
         render_analyst_panel()

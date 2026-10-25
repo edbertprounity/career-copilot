@@ -446,6 +446,51 @@ def test_explicit_confirm_allowed_while_thin_items_remain(
     assert complete_profile.is_confirmed is True
 
 
+def test_no_projects_plus_tutoring_is_saved_and_not_asked_again(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    profile = StudentProfile(
+        name="Edber",
+        degree="Bachelor of Science",
+        institution="UTS",
+        year="2026",
+        technical_skills=["Excel"],
+        target_roles=["Math Tutor"],
+    )
+    history = [
+        {
+            "role": "assistant",
+            "content": (
+                "To finish setting up your profile, do you have any specific projects? "
+                "What projects would you like to include?"
+            ),
+        }
+    ]
+
+    def stub_call(_client, **_kwargs):
+        return {
+            "thought": "Still need projects.",
+            "tool_name": "ask_targeted_follow_up",
+            "parameters": {"missing_fields": ["projects"]},
+            "assistant_message": "What projects would you like to include?",
+        }
+
+    monkeypatch.setattr(ae, "get_gemini_client", lambda: object())
+    monkeypatch.setattr(ae, "call_gemini_json", stub_call)
+    reply = (
+        "I don't have project but I do have experience as a volunteer tutor "
+        "for last year final students I was doing math tutor for few sessions "
+        "to help final year students prepare for their exam"
+    )
+    step = run_agent_turn(profile, history, reply, 4)
+    assert profile.projects == []
+    assert "projects" in profile.declined_fields
+    assert profile.experience[0].role == "Volunteer tutor"
+    assert "exam" in profile.experience[0].description
+    assert "project" not in step.assistant_message.lower()
+    assert "projects" not in inspect_completeness(profile)["missing_fields"]
+
+
 def test_extracted_cv_writes_name_and_education(empty_profile: StudentProfile) -> None:
     result = apply_extracted_profile_facts(
         empty_profile,

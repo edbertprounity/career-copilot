@@ -33,6 +33,7 @@ class StudentProfile(BaseModel):
     activities: list[str] = Field(default_factory=list)
     target_roles: list[str] = Field(default_factory=list)
     links: dict[str, str] = Field(default_factory=dict)
+    declined_fields: list[str] = Field(default_factory=list)
     is_confirmed: bool = False
 
 

@@ -2,7 +2,10 @@
 
 from __future__ import annotations
 
+from streamlit.testing.v1 import AppTest
+
 from app.ui_chat import (
+    _cv_download_key,
     classify_chat_intent,
     compose_attachment_note,
     split_chat_prompt,
@@ -89,3 +92,31 @@ def test_compose_attachment_note_lists_extracted_facts_only() -> None:
     assert "BSc Computing" in note
     assert "do not invent" in note
     assert "Student message: here you go" in note
+
+
+def test_cv_download_keys_stay_unique_for_the_same_draft() -> None:
+    block = {"download_key": "chat_cv_personal_cv"}
+    assert _cv_download_key(block, 0, 0) != _cv_download_key(block, 1, 0)
+
+
+def test_two_personal_cv_bubbles_can_render() -> None:
+    def _app() -> None:
+        from app.ui_chat import render_chat_item
+
+        block = {
+            "type": "cv",
+            "markdown": "# Personal CV",
+            "pdf_bytes": b"%PDF-1.4",
+            "download_key": "chat_cv_personal_cv",
+        }
+        history = [
+            {"role": "assistant", "content": "First draft.", "blocks": [dict(block)]},
+            {"role": "assistant", "content": "Second draft.", "blocks": [dict(block)]},
+        ]
+        for index, item in enumerate(history):
+            render_chat_item(item, item_index=index)
+
+    at = AppTest.from_function(_app, default_timeout=30)
+    at.run()
+    assert not at.exception
+    assert len(at.download_button) == 2

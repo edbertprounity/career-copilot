@@ -45,6 +45,7 @@ UPDATABLE_FIELDS = (
     "activities",
     "target_roles",
     "links",
+    "declined_fields",
 )
 
 # Index-addressed writes: replace one record's description without resending the
@@ -56,18 +57,25 @@ ITEM_DESCRIPTION_FIELDS = {
 
 STRING_FIELDS = ("name", "degree", "institution", "campus", "year")
 
-LIST_STR_FIELDS = ("technical_skills", "activities", "target_roles")
+LIST_STR_FIELDS = (
+    "technical_skills",
+    "activities",
+    "target_roles",
+    "declined_fields",
+)
 
 REQUIRED_FIELD_CHECKS = (
     ("name", lambda p: bool(p.name.strip())),
     ("degree", lambda p: bool(p.degree.strip())),
     ("institution", lambda p: bool(p.institution.strip())),
     ("year", lambda p: bool(p.year.strip())),
-    ("technical_skills", lambda p: bool(p.technical_skills)),
-    ("projects", lambda p: bool(p.projects)),
-    ("experience", lambda p: bool(p.experience)),
+    ("technical_skills", lambda p: bool(p.technical_skills) or _declined(p, "technical_skills")),
+    ("projects", lambda p: bool(p.projects) or _declined(p, "projects")),
+    ("experience", lambda p: bool(p.experience) or _declined(p, "experience")),
     ("target_roles", lambda p: bool(p.target_roles)),
 )
+
+DECLINABLE_FIELDS = ("technical_skills", "projects", "experience")
 
 GROUPED_FIELDS = ("name", "degree", "institution", "year")
 INDIVIDUAL_FIELDS = ("technical_skills", "projects", "experience", "target_roles")
@@ -238,6 +246,220 @@ def _looks_like_person_name(text: str) -> str | None:
     if {part.lower() for part in parts} & _NAME_STOP:
         return None
     return " ".join(parts)
+
+
+def _declined(profile: StudentProfile, field: str) -> bool:
+    return field in (profile.declined_fields or [])
+
+
+_BARE_DECLINE_RE = re.compile(
+    r"^\s*(no|nope|none|nothing|skip|n/?a|not really|no thanks|"
+    r"i don't have (any|one|them)|i do not have (any|one|them)|"
+    r"i dont have (any|one|them))\s*[.!]?\s*$",
+    re.I,
+)
+_PROJECT_DECLINE_RE = re.compile(
+    r"\b(no|not|don't|dont|do not|without|skip|none|haven't|havent)\b"
+    r"(?:\s+\w+){0,5}\s+projects?\b|\bskip projects?\b|\bno projects?\b",
+    re.I,
+)
+_EXPERIENCE_DECLINE_RE = re.compile(
+    r"\b(no|not|don't|dont|do not)\s+have\s+(any\s+)?(work\s+|job\s+)?"
+    r"experience\b|\bno (work\s+)?experience\b|\bskip experience\b",
+    re.I,
+)
+_SKILL_DECLINE_RE = re.compile(
+    r"\b(no|not|don't|dont|do not)\s+have\s+(any\s+)?(technical\s+)?skills?\b|"
+    r"\bnot technical\b|\bno coding\b|\bskip skills\b",
+    re.I,
+)
+_EXPERIENCE_OFFER_RE = re.compile(
+    r"\b(experience|volunteer|volunteered|worked as|tutor|tutored|internship|interned)\b",
+    re.I,
+)
+
+
+def _declines_field(text: str, field: str) -> bool:
+    raw = text or ""
+    if field == "projects":
+        return _PROJECT_DECLINE_RE.search(raw) is not None
+    if field == "experience":
+        if re.search(r"\b(do|did)\s+have\s+experience\b|\bhave experience\b", raw, re.I):
+            return False
+        return _EXPERIENCE_DECLINE_RE.search(raw) is not None
+    if field == "technical_skills":
+        return _SKILL_DECLINE_RE.search(raw) is not None
+    return False
+
+
+def _asked_field(last_assistant: str) -> str | None:
+    text = (last_assistant or "").lower()
+    if "project" in text:
+        return "projects"
+    if "experience" in text or "internship" in text:
+        return "experience"
+    if "technical skill" in text or "skills would" in text:
+        return "technical_skills"
+    if "target role" in text or "roles are you" in text:
+        return "target_roles"
+    if "full name" in text or "your name" in text or "what's your name" in text:
+        return "name"
+    if "degree" in text or "qualification" in text:
+        return "degree"
+    if "institution" in text:
+        return "institution"
+    if "year" in text or "graduat" in text:
+        return "year"
+    return None
+
+
+def _experience_record_from_text(text: str) -> dict | None:
+    if _declines_field(text, "experience") or not _EXPERIENCE_OFFER_RE.search(text or ""):
+        return None
+    parts = re.split(r"\bbut\b", text.strip(), maxsplit=1, flags=re.I)
+    description = (parts[-1] if len(parts) > 1 else text).strip()
+    if len(description.split()) < 6:
+        return None
+    lower = description.lower()
+    if "volunteer" in lower and "tutor" in lower:
+        role = "Volunteer tutor"
+        kind = "Volunteer"
+    elif "tutor" in lower:
+        role = "Tutor"
+        kind = "Volunteer" if "volunteer" in lower else ""
+    elif "intern" in lower:
+        role = "Intern"
+        kind = "Internship"
+    else:
+        role = "Experience"
+        kind = ""
+    return {
+        "role": role,
+        "organisation": "",
+        "type": kind,
+        "description": description,
+    }
+
+
+def _skills_from_text(text: str) -> list[str]:
+    cleaned = re.sub(
+        r"^(my skills are|i know|i use|technical skills:?)\s*",
+        "",
+        (text or "").strip(),
+        flags=re.I,
+    )
+    parts = re.split(r",| and | & ", cleaned)
+    skills = []
+    for part in parts:
+        skill = part.strip(" .")
+        if 1 <= len(skill) <= 40 and skill.lower() not in {"none", "no", "skip"}:
+            skills.append(skill)
+    return skills[:12]
+
+
+def _field_update_from_reply(field: str, text: str) -> dict:
+    cleaned = (text or "").strip()
+    if not cleaned or _declines_field(cleaned, field):
+        return {}
+    if field == "name":
+        name = _looks_like_person_name(cleaned)
+        return {"name": name} if name else {}
+    if field == "degree" and 1 <= len(cleaned.split()) <= 14:
+        return {"degree": cleaned.strip(" .")}
+    if field == "institution" and 1 <= len(cleaned.split()) <= 14:
+        return {"institution": cleaned.strip(" .")}
+    if field == "year" and len(cleaned.split()) <= 8:
+        return {"year": cleaned.strip(" .")}
+    if field == "target_roles" and 1 <= len(cleaned.split()) <= 8:
+        return {"target_roles": [cleaned.strip(" .")]}
+    if field == "technical_skills":
+        skills = _skills_from_text(cleaned)
+        return {"technical_skills": skills} if skills else {}
+    if field == "projects" and len(cleaned.split()) >= 6:
+        title = " ".join(cleaned.split()[:6]).strip(" .")
+        return {
+            "projects": [
+                {
+                    "title": title,
+                    "context": "",
+                    "description": cleaned,
+                    "technologies": [],
+                }
+            ]
+        }
+    if field == "experience":
+        record = _experience_record_from_text(cleaned) or {
+            "role": "Experience",
+            "organisation": "",
+            "type": "",
+            "description": cleaned,
+        }
+        if len(str(record["description"]).split()) < 6:
+            return {}
+        return {"experience": [record]}
+    return {}
+
+
+def absorb_user_reply(
+    profile: StudentProfile,
+    user_message: str,
+    conversation_history: list[dict] | None,
+) -> dict:
+    """Write a direct answer or an explicit skip. Does not invent facts.
+
+    A reply like "I don't have a project, but I tutored..." declines projects
+    and stores the experience. Later turns must not ask for that project again.
+    """
+    text = (user_message or "").strip()
+    if not text:
+        return {"status": "skipped", "updated_fields": []}
+    asked = _asked_field(_last_assistant_content(conversation_history))
+    updates: dict = {}
+    declined = [field for field in DECLINABLE_FIELDS if _declines_field(text, field)]
+    if asked in DECLINABLE_FIELDS and _BARE_DECLINE_RE.match(text):
+        if asked not in declined:
+            declined.append(asked)
+    if asked and asked not in declined and not _bare_decline_for_other(text):
+        if _field_still_empty(profile, asked):
+            updates.update(_field_update_from_reply(asked, text))
+    if "projects" in declined and not profile.experience and "experience" not in updates:
+        record = _experience_record_from_text(text)
+        if record:
+            updates["experience"] = [record]
+    for field in list(declined):
+        if field in updates or not _field_still_empty(profile, field):
+            declined.remove(field)
+    if declined:
+        merged = [field for field in profile.declined_fields if field not in declined]
+        merged.extend(declined)
+        updates["declined_fields"] = merged
+    if not updates:
+        return {"status": "skipped", "updated_fields": []}
+    return update_profile_field(profile, updates)
+
+
+def _bare_decline_for_other(text: str) -> bool:
+    return _BARE_DECLINE_RE.match(text or "") is not None
+
+
+def _field_still_empty(profile: StudentProfile, field: str) -> bool:
+    if field == "name":
+        return not profile.name.strip()
+    if field == "degree":
+        return not profile.degree.strip()
+    if field == "institution":
+        return not profile.institution.strip()
+    if field == "year":
+        return not profile.year.strip()
+    if field == "technical_skills":
+        return not profile.technical_skills
+    if field == "projects":
+        return not profile.projects
+    if field == "experience":
+        return not profile.experience
+    if field == "target_roles":
+        return not profile.target_roles
+    return False
 
 
 def name_from_user_reply(
@@ -516,6 +738,7 @@ def run_agent_turn(
         return _step_limit_reached(profile, turn_number)
 
     before = profile.model_dump()
+    absorb_user_reply(profile, user_message, conversation_history)
     supplied_name = name_from_user_reply(
         user_message, conversation_history, profile
     )
@@ -859,6 +1082,61 @@ def _user_confirms_profile(
     return "reply confirm" in last or CONFIRM_PROMPT.lower() in last
 
 
+def _sentence_asks(sentence: str, field: str) -> bool:
+    text = sentence.lower().strip()
+    if "?" not in text and not text.startswith(("what ", "which ", "can you", "could you")):
+        return False
+    cues = {
+        "projects": ("what project", "which project", "projects would", "any project", "skip projects"),
+        "experience": ("what experience", "what work", "experience should", "internship experience"),
+        "technical_skills": ("technical skill", "skills would you", "what skills"),
+        "name": ("full name", "your name"),
+        "degree": ("what degree", "qualification"),
+        "institution": ("which institution", "institution did you"),
+        "year": ("what year", "graduation", "study year"),
+        "target_roles": ("target role", "roles are you"),
+    }
+    return any(cue in text for cue in cues.get(field, ()))
+
+
+def _strip_satisfied_questions(message: str, profile: StudentProfile) -> str:
+    """Drop a question for a field the profile already has or the student skipped."""
+    missing = set(inspect_completeness(profile)["missing_fields"])
+    kept: list[str] = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", message or ""):
+        sentence = sentence.strip()
+        if not sentence:
+            continue
+        if any(
+            field not in missing and _sentence_asks(sentence, field)
+            for field in (
+                "projects",
+                "experience",
+                "technical_skills",
+                "name",
+                "degree",
+                "institution",
+                "year",
+                "target_roles",
+            )
+        ):
+            continue
+        kept.append(sentence)
+    return " ".join(kept).strip()
+
+
+def _same_topic(message: str, question: str) -> bool:
+    """True when the model already asked the follow-on question in its own words."""
+    msg = (message or "").lower()
+    q = (question or "").lower()
+    if not msg or not q:
+        return False
+    for token in ("project", "experience", "skill", "target role", "full name", "degree", "institution", "year"):
+        if token in q and token in msg:
+            return True
+    return False
+
+
 def _message_covers_prompt(message: str, question: str, extra: dict) -> bool:
     """True only when this turn already asked the computed next question."""
     msg = " ".join((message or "").lower().split())
@@ -942,12 +1220,15 @@ def _apply_follow_on_prompt(
     }:
         return tool_name, observation, assistant_message
 
+    assistant_message = _strip_satisfied_questions(assistant_message, profile)
     follow_tool, question, extra = _next_actionable_prompt(
         profile, conversation_history
     )
     if not question:
         return tool_name, observation, assistant_message
-    if _message_covers_prompt(assistant_message, question, extra):
+    if _message_covers_prompt(assistant_message, question, extra) or _same_topic(
+        assistant_message, question
+    ):
         return tool_name, observation, assistant_message
 
     merged = dict(observation) if isinstance(observation, dict) else {}
@@ -1003,6 +1284,7 @@ tool_name must be one of these exact names, or the literal "none":
    For experience_description: value is an object {{"index": int, "description": str}}. Same, for experience[index].
    When the user adds detail about a project or experience entry that is ALREADY in the profile, use project_description / experience_description with that entry's index (from thin_content, next_elaboration, or the profile JSON). Replace the old description with the fuller text — do not append to it, and do not resend a whole projects or experience list, because sibling entries can be lost that way. Use the whole-list projects / experience fields only when adding a new entry.
    For links: value is an object of string keys to string URLs; new keys are merged into existing links.
+   For declined_fields: value is a list of field names the student explicitly skipped (projects, experience, or technical_skills). Do not ask again for a name in declined_fields or in grouped_missing/next_individual_field. If the student says they have no projects but describes work, volunteering, or tutoring, write that as experience and decline projects. Never ask the same question two turns in a row when the student already answered it.
    If the user's message contains multiple distinct facts the user has actually committed to, include ALL of those committed facts in a single update_profile_field call as a dict of field_name -> value pairs — do not pick only one and discard the rest. Do not write a field the user is still deciding.
 2. inspect_completeness
    parameters: {{}}

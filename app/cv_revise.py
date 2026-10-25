@@ -5,9 +5,16 @@ Does not call Gemini and does not invent employers, skills, or results.
 
 from __future__ import annotations
 
+import re
+
 from app.schemas import StudentProfile
 
 _ITEM_SECTIONS = ("Projects", "Experience")
+_SKILLS_SECTION = "Skills"
+# Prefixes kept when an item or sentence is removed from a line.
+_TECH_PREFIX_RE = re.compile(r"^(\s*-\s*technologies\s*:\s*)(.*)$", re.IGNORECASE)
+_SKILLS_PREFIX_RE = re.compile(r"^(\s*(?:[-*•]\s+)?(?:\*\*[^*]+:\*\*\s*)?)(.*)$")
+_PROSE_PREFIX_RE = re.compile(r"^(\s*(?:#+\s*|[-*•]\s+)?)(.*)$")
 
 
 def revise_cv_sections(
@@ -25,7 +32,7 @@ def revise_cv_sections(
         section = str(issue.get("section") or "")
         quote = str(issue.get("quote") or "").strip()
         if kind == "ungrounded_edit" and quote and section in sections:
-            updated = _drop_line_containing(sections[section], quote)
+            updated = _remove_quote(sections[section], quote, section)
             if updated != sections[section]:
                 sections[section] = updated
                 notes.append(f"Removed “{quote}” from {section} because it is not in your profile.")
@@ -47,8 +54,32 @@ def revise_cv_sections(
     return sections, notes
 
 
-def _drop_line_containing(text: str, quote: str) -> str:
-    kept = [line for line in text.splitlines() if quote not in line]
+def _remove_quote(text: str, quote: str, section: str) -> str:
+    """Remove the quoted claim, not the line around it.
+
+    A list line (Skills, or "- Technologies:") loses only the item equal to
+    the quote, keeping its **Label:** and the other items. A prose line loses
+    only the quoted sentence. A line is dropped only when nothing is left.
+    """
+    kept: list[str] = []
+    for line in text.splitlines():
+        if quote not in line:
+            kept.append(line)
+            continue
+        tech = _TECH_PREFIX_RE.match(line)
+        if tech or section == _SKILLS_SECTION:
+            prefix, body = (tech or _SKILLS_PREFIX_RE.match(line)).groups()
+            items = [item.strip() for item in body.split(",") if item.strip()]
+            remaining = [item for item in items if item != quote]
+            if remaining == items:
+                kept.append(line)  # the quote is inside an item, not one: leave it
+            elif remaining:
+                kept.append(prefix + ", ".join(remaining))
+            continue
+        prefix, body = _PROSE_PREFIX_RE.match(line).groups()
+        rest = " ".join(body.replace(quote, " ").split())
+        if rest:
+            kept.append(prefix + rest)
     return "\n".join(kept).strip()
 
 

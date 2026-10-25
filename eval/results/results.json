@@ -1,0 +1,513 @@
+{
+  "date": "2026-10-25",
+  "rows": [
+    {
+      "profile": "Maya Chen",
+      "job": "Machine Learning Engineer",
+      "original": {
+        "flags": 0,
+        "suggestions": 0
+      },
+      "q1": {
+        "flags": 11,
+        "anchored": 6,
+        "seeded_skill": "Kubernetes",
+        "seeded_caught": true,
+        "control_false_positive": false
+      },
+      "q2": {
+        "suggestions": 11,
+        "specific": 11
+      },
+      "q3": {
+        "no_evidence_before": 4,
+        "after_matching": 1,
+        "after_unrelated": 4,
+        "records": [
+          {
+            "claim": "Flask",
+            "skill": "Flask",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "Flask"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "Flask",
+            "skill": "Flask",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "SQLite",
+            "skill": "SQL",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "SQLite"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "SQLite",
+            "skill": "SQL",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "prompt design"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "JSON",
+            "skill": "JSON",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "JSON"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "JSON",
+            "skill": "JSON",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "Liam Patel",
+      "job": "Graduate AI Engineer",
+      "original": {
+        "flags": 0,
+        "suggestions": 0
+      },
+      "q1": {
+        "flags": 9,
+        "anchored": 5,
+        "seeded_skill": "Kubernetes",
+        "seeded_caught": true,
+        "control_false_positive": false
+      },
+      "q2": {
+        "suggestions": 9,
+        "specific": 8
+      },
+      "q3": {
+        "no_evidence_before": 5,
+        "after_matching": 0,
+        "after_unrelated": 5,
+        "records": [
+          {
+            "claim": "evaluation",
+            "skill": "evaluation",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "evaluation"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "evaluation",
+            "skill": "evaluation",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "embeddings",
+            "skill": "embeddings",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "embeddings"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "embeddings",
+            "skill": "embeddings",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "FAISS",
+            "skill": "FAISS",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "FAISS"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "FAISS",
+            "skill": "FAISS",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "prompt design"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "LLM API",
+            "skill": "LLM API",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "LLM API"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "LLM API",
+            "skill": "LLM API",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "Sofia Williams",
+      "job": "AI Engineer / Data Scientist (Agentic AI) | Manager/Senior Manager",
+      "original": {
+        "flags": 0,
+        "suggestions": 0
+      },
+      "q1": {
+        "flags": 10,
+        "anchored": 5,
+        "seeded_skill": "Kubernetes",
+        "seeded_caught": true,
+        "control_false_positive": false
+      },
+      "q2": {
+        "suggestions": 10,
+        "specific": 10
+      },
+      "q3": {
+        "no_evidence_before": 3,
+        "after_matching": 0,
+        "after_unrelated": 3,
+        "records": [
+          {
+            "claim": "text embeddings",
+            "skill": "text embeddings",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "text embeddings"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "text embeddings",
+            "skill": "text embeddings",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "similarity search",
+            "skill": "similarity search",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "similarity search"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "similarity search",
+            "skill": "similarity search",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "evaluation",
+            "skill": "evaluation",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "evaluation"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "evaluation",
+            "skill": "evaluation",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "Noah Ibrahim",
+      "job": "Machine Learning Engineer",
+      "original": {
+        "flags": 0,
+        "suggestions": 0
+      },
+      "q1": {
+        "flags": 11,
+        "anchored": 6,
+        "seeded_skill": "Kubernetes",
+        "seeded_caught": true,
+        "control_false_positive": false
+      },
+      "q2": {
+        "suggestions": 11,
+        "specific": 11
+      },
+      "q3": {
+        "no_evidence_before": 4,
+        "after_matching": 1,
+        "after_unrelated": 4,
+        "records": [
+          {
+            "claim": "Flask",
+            "skill": "Flask",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "Flask"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "Flask",
+            "skill": "Flask",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "SQLite",
+            "skill": "SQL",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "SQLite"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "SQLite",
+            "skill": "SQL",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "pytest",
+            "skill": "pytest",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "pytest"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "pytest",
+            "skill": "pytest",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "technical reporting",
+            "skill": "technical reporting",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "technical reporting"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "technical reporting",
+            "skill": "technical reporting",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          }
+        ]
+      }
+    },
+    {
+      "profile": "Ethan Nguyen",
+      "job": "Machine Learning Engineer, NLP & Multimodal AI",
+      "original": {
+        "flags": 0,
+        "suggestions": 0
+      },
+      "q1": {
+        "flags": 11,
+        "anchored": 6,
+        "seeded_skill": "Kubernetes",
+        "seeded_caught": true,
+        "control_false_positive": false
+      },
+      "q2": {
+        "suggestions": 11,
+        "specific": 11
+      },
+      "q3": {
+        "no_evidence_before": 5,
+        "after_matching": 1,
+        "after_unrelated": 5,
+        "records": [
+          {
+            "claim": "PostgreSQL",
+            "skill": "SQL",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "PostgreSQL"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "PostgreSQL",
+            "skill": "SQL",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "JUnit",
+            "skill": "JUnit",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "JUnit"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "JUnit",
+            "skill": "JUnit",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "structured tool calls",
+            "skill": "structured tool calls",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "structured tool calls"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "structured tool calls",
+            "skill": "structured tool calls",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "prompt design"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "prompt design",
+            "skill": "prompt design",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          },
+          {
+            "claim": "JSON",
+            "skill": "JSON",
+            "source_name": "sample_matching.png",
+            "shows": [
+              "JSON"
+            ],
+            "status": "supported"
+          },
+          {
+            "claim": "JSON",
+            "skill": "JSON",
+            "source_name": "sample_unrelated.png",
+            "shows": [
+              "Photo of a cat on a sofa"
+            ],
+            "status": "not_shown"
+          }
+        ]
+      }
+    }
+  ]
+}

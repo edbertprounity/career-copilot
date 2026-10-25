@@ -23,7 +23,7 @@ from app.cv_generator import (
     generate_cv_summary,
 )
 from app.schemas import StudentProfile
-from app.ui_analyst import render_analyst_panel
+from app.ui_analyst import apply_pending_revision, render_analyst_panel
 from app.ui_chat import (
     CHAT_FILE_TYPES,
     attachment_records,
@@ -1056,6 +1056,7 @@ def main() -> None:
     st.set_page_config(page_title="Student Career Copilot", layout="wide")
     _init_state()
     _apply_pending_section_reset()
+    apply_pending_revision()
     st.title("Student Career Copilot")
     with st.spinner("Loading local job index..."):
         _ensure_retrieval_ready()

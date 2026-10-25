@@ -27,6 +27,9 @@ ISSUES_KEY = "analysis_issues"
 SNAPSHOT_KEY = "analysis_snapshot"
 DIAGNOSTICS_KEY = "analysis_diagnostics"
 ANALYSE_BUTTON_KEY = "analysis_run"
+PENDING_REVISION_KEY = "pending_cv_revision"
+# The CV editor's text_area keys, one per section (streamlit_app WIDGET_PREFIX).
+EDITOR_WIDGET_PREFIX = "cvedit_"
 STALE_CAPTION = (
     "Your CV or evidence has changed since this analysis. Press Analyse again."
 )
@@ -66,6 +69,19 @@ REASON_LABELS = {
 }
 _QUOTE_PREVIEW_CHARS = 60
 _MARKDOWN_SPECIAL_RE = re.compile(r"([\\`*_\[\]<>#|~$])")
+
+
+def apply_pending_revision() -> None:
+    """Copy a revision from the last run into the CV editor's widget keys.
+
+    Call it before any widget is drawn: Streamlit refuses a write to a
+    widget's key once that widget exists in the current run.
+    """
+    revised = st.session_state.pop(PENDING_REVISION_KEY, None)
+    if not revised:
+        return
+    for name, content in revised.items():
+        st.session_state[f"{EDITOR_WIDGET_PREFIX}{name}"] = content
 
 
 def render_analysis_panel() -> None:
@@ -108,8 +124,9 @@ def render_analysis_panel() -> None:
         st.session_state[DIAGNOSTICS_KEY] = diagnostics
         st.session_state["cv_revision_notes"] = notes
         st.session_state["cv_sections"] = revised
-        for name, content in revised.items():
-            st.session_state[f"cvedit_{name}"] = content
+        # The editor's widgets were drawn earlier in this run, so their keys
+        # are written at the start of the next one (apply_pending_revision).
+        st.session_state[PENDING_REVISION_KEY] = dict(revised)
         st.session_state["pending_cv_refresh"] = True
         st.rerun()
 
